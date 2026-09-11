@@ -111,7 +111,18 @@ async function fetchWithProgress(url, onProgress) {
   const counted = res.body.pipeThrough(new TransformStream({
     transform(chunk, ctrl) { got += chunk.byteLength; onProgress(got, total); ctrl.enqueue(chunk); },
   }));
-  return new Response(url.endsWith(".gz") ? counted.pipeThrough(new DecompressionStream("gzip")) : counted).arrayBuffer();
+  if (!url.endsWith(".gz")) return new Response(counted).arrayBuffer();
+  // Some hosts serve .gz with Content-Encoding: gzip, in which case the browser has already inflated it.
+  // Peek at the first two bytes: only gunzip ourselves when the gzip magic (1f 8b) is still there.
+  const reader = counted.getReader();
+  const first = await reader.read();
+  if (first.done) return new ArrayBuffer(0);
+  const isGzip = first.value[0] === 0x1f && first.value[1] === 0x8b;
+  const rest = new ReadableStream({
+    start(ctrl) { ctrl.enqueue(first.value); },
+    async pull(ctrl) { const { done, value } = await reader.read(); if (done) ctrl.close(); else ctrl.enqueue(value); },
+  });
+  return new Response(isGzip ? rest.pipeThrough(new DecompressionStream("gzip")) : rest).arrayBuffer();
 }
 
 /** A short version token for a served file: ETag if present, else size + last-modified. */
