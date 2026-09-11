@@ -1,0 +1,26 @@
+# build inputs and intermediates (rebuild with scripts/)
+data/eia_generator_month_2010plus.parquet
+data/eia_generator_month_2010plus.facetful*
+data/*.facetful
+data/out_ferc1__yearly_all_plants.parquet
+data/core_*.parquet
+data/cems_*.parquet
+data/ferc_plant_tech_year.parquet
+data/eia930_daily_netgen_by_ba_source.parquet
+.sideview/
+.claude/
+*.png
+data/cems/
+data/*.parquet
+# sandbox mount artefacts
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc

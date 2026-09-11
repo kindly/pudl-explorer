@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PUDL generator explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
+<link rel="stylesheet" href="theme.css">
+</head>
+<body>
+
+<div id="loading">
+  <div><b>PUDL generator explorer</b></div>
+  <progress></progress>
+  <div class="bytes"></div>
+  <div class="steps"></div>
+  <div class="err"></div>
+</div>
+
+<header class="bar">
+  <div class="wordmark"><b>PUDL</b><span>generator explorer</span></div>
+  <div class="search">
+    <input id="q" type="search" placeholder="search plant or utility name…" autocomplete="off">
+    <span class="hint">words are AND'ed</span>
+  </div>
+  <div class="totals" id="totals">
+    <div class="total"><span class="fig" id="t-plants">–</span><span class="lbl">plants</span></div>
+    <div class="total"><span class="fig" id="t-twh">–</span><span class="lbl">TWh generated</span></div>
+    <div class="total"><span class="fig" id="t-gw">–</span><span class="lbl">avg GW capacity</span></div>
+    <div class="total"><span class="fig" id="t-cf">–</span><span class="lbl">capacity factor</span></div>
+    <div class="total"><span class="fig" id="t-range" style="font-size:0.9rem">–</span><span class="lbl">in range</span></div>
+  </div>
+  <button id="clear-all" class="clear-all" type="button" hidden>Clear filters</button>
+</header>
+
+<div class="controls">
+  <label>Measure
+    <select id="measure">
+      <option value="twh">Generation (TWh)</option>
+      <option value="gw">Avg capacity (GW)</option>
+      <option value="cost">Fuel cost ($bn)</option>
+      <option value="tbtu">Fuel burned (TBtu)</option>
+      <option value="plants">Plants</option>
+      <optgroup label="Emissions (EPA CEMS, fossil units > 25 MW)">
+        <option value="co2">CO₂ (Mt)</option>
+        <option value="co2_mwh">CO₂ intensity (t/MWh)</option>
+        <option value="co2_mw">CO₂ per MW of capacity (t/MW·yr)</option>
+      </optgroup>
+      <optgroup label="Costs (FERC Form 1, regulated utilities)">
+        <option value="capex">Plant in service ($bn)</option>
+        <option value="opex_mwh">Operating cost ($/MWh)</option>
+      </optgroup>
+    </select>
+  </label>
+  <div class="chips" id="chips"></div>
+  <button id="clear-all-2" class="clear-all" type="button" hidden>Clear filters</button>
+</div>
+
+<section class="facets" id="facets"></section>
+
+<section class="viz">
+  <div class="stack">
+    <section class="panel chart" id="year-chart">
+      <h3>Years <span class="ms"></span></h3>
+      <div class="sub"></div>
+      <svg viewBox="0 0 640 230"></svg>
+      <div class="legend"></div>
+    </section>
+    <section class="panel chart" id="month-chart">
+      <h3>Seasonality <span class="ms"></span></h3>
+      <div class="sub"></div>
+      <svg viewBox="0 0 640 170"></svg>
+    </section>
+  </div>
+  <section class="panel map" id="map">
+    <h3>Plants <span class="ms"></span></h3>
+    <div class="sub"></div>
+    <div class="mapbox"><div class="tip" hidden></div></div>
+    <div class="legend"></div>
+  </section>
+</section>
+
+<section class="panel grid" id="grid">
+  <h3>Generators by year <span class="count" style="font-weight:500;color:var(--text-faint);font-size:0.75rem"></span><span class="ms"></span></h3>
+  <div class="scroller">
+    <table>
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <span class="settle" id="settle"></span>
+  <span id="open-info"></span>
+  <label><input type="checkbox" id="show-ms"> show timings</label>
+  <button id="reset">reset stored data</button>
+  <span>Data: <a href="https://catalyst.coop/pudl/" target="_blank" rel="noopener">PUDL</a> <code>out_eia__monthly_generators</code> 2010 onward, aggregated to plant × technology × year and generator × year; emissions from EPA CEMS via PUDL's crosswalk; costs from FERC Form 1 via <code>plant_id_pudl</code> · engine: facetful</span>
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
