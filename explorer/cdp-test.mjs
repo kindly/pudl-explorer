@@ -67,7 +67,14 @@ if (ready) {
   console.log("map points:", await evalJs(`document.querySelector('#map .sub').textContent`), "| maplibre canvas:", await evalJs(`!!document.querySelector('#map canvas.maplibregl-canvas')`));
   console.log("season sub:", await evalJs(`document.querySelector('#month-chart .sub').textContent`), "| bars:", await evalJs(`document.querySelectorAll('#month-chart svg rect').length`));
   await evalJs(`document.getElementById('show-ms').click(); true`);
+  await sleep(4000); // let basemap tiles arrive
+  console.log("maplibre log:", logs.filter((l) => /maplibre/.test(l)).join(" | ").slice(0, 300));
   await shot("shot-1-initial.png");
+  // viewport-only capture of the map element (full-page capture can drop WebGL tile content)
+  await evalJs(`document.getElementById('map').scrollIntoView({block: 'start'}); true`);
+  await sleep(2500);
+  { const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }); writeFileSync(join(outDir, "shot-map.png"), Buffer.from(r.data, "base64")); console.log("screenshot shot-map.png"); }
+  console.log("map canvas:", await evalJs(`(() => { const c = document.querySelector('#map canvas'); return c ? c.width + 'x' + c.height : 'no canvas'; })()`), "| maplibre logs:", logs.filter((l) => /maplibre/.test(l)).length);
   // click the "coal" fuel facet row, then a state, and re-check
   await evalJs(`(() => { const r = [...document.querySelectorAll('.facet .row')].find(r => r.textContent.trim().startsWith('coal')); r.click(); return !!r; })()`);
   await sleep(4000);
@@ -97,6 +104,7 @@ if (ready) {
   await sleep(2500);
   console.log("drill-down chips:", await evalJs(`[...document.querySelectorAll('.chip')].map(c => c.textContent).join(' ; ')`), "| totals:", await evalJs(`[...document.querySelectorAll('#totals .total')].map(t => t.textContent.trim().replace(/\s+/g,' ')).join(' | ')`), "| grid rows:", await evalJs(`document.querySelectorAll('#grid tbody tr').length`));
   console.log("settle:", await evalJs(`document.getElementById('settle').textContent`));
+  await sleep(1500); // map fly-to
   await shot("shot-3-drilldown.png");
   await evalJs(`document.getElementById('clear-all').click(); true`);
   await sleep(1500);

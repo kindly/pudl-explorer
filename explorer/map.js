@@ -32,6 +32,8 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
     attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false, touchPitch: false,
   });
   map.addControl(new NavigationControl({ showCompass: false }), "top-right");
+  map.on("error", (e) => console.warn("maplibre:", e.error?.message ?? e));
+  map.once("idle", () => console.info("maplibre: basemap idle", style === BLANK_STYLE ? "(blank style)" : "(positron)", Object.keys(style.sources).join(",")));
   map.touchZoomRotate.disableRotation();
   let pending = null;
   const ready = new Promise((res) => map.on("load", () => {
@@ -63,6 +65,13 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
     };
     const src = map.getSource("plants");
     if (src) src.setData(data); else pending = data;
+    // a handful of points (a plant drill-down): fly to them; otherwise stay where the user left the view
+    if (points.length && points.length <= 10) {
+      const lons = points.map((q) => q.lon), lats = points.map((q) => q.lat);
+      map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], { padding: 80, maxZoom: 9, duration: 700 });
+    } else if (zoomedIn) { map.fitBounds(US_BOUNDS, { padding: 10, duration: 700 }); }
+    zoomedIn = points.length > 0 && points.length <= 10;
   }
+  let zoomedIn = false;
   return { map, update, ready, fitUS: () => map.fitBounds(US_BOUNDS, { padding: 10, duration: 600 }) };
 }
