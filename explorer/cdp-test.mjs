@@ -15,7 +15,7 @@ const server = spawn("python3", ["-m", "http.server", "8767", "--bind", "127.0.0
 await sleep(800);
 const chrome = spawn("chromium", [
   "--headless=new", "--no-proxy-server", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
-  "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--window-size=1400,1800", `--crash-dumps-dir=${profile}`, "--disable-crash-reporter",
+  "--no-first-run", "--no-default-browser-check", "--disable-gpu", `--window-size=${process.env.WIDTH ?? 1400},1800`, `--crash-dumps-dir=${profile}`, "--disable-crash-reporter",
   "--js-flags=--max-old-space-size=6144", "--enable-features=FileSystemAccessAPI",
   "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "about:blank",
 ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -42,7 +42,7 @@ const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id
 const evalJs = async (expr) => { const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? "eval failed"); return r.result.value; };
 const shot = async (name) => { const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true }); writeFileSync(join(outDir, name), Buffer.from(r.data, "base64")); console.log("screenshot", name); };
 await send("Runtime.enable"); await send("Log.enable"); await send("Page.enable");
-await send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 1800, deviceScaleFactor: 1, mobile: false });
+await send("Emulation.setDeviceMetricsOverride", { width: Number(process.env.WIDTH ?? 1400), height: 1800, deviceScaleFactor: 1, mobile: false });
 const t0 = performance.now();
 await send("Page.navigate", { url });
 // wait for loading overlay to hide (or error)

@@ -95,7 +95,9 @@ header.bar {
 .panel h3 .ms { margin-left: auto; font-size: 0.7rem; font-weight: 500; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 body:not(.show-ms) .ms { display: none; }
 .panel h3 .clear { font-size: 0.7rem; font-weight: 500; }
-.facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr)); gap: 0.8rem; margin-bottom: 0.8rem; }
+.facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 0.8rem; margin-bottom: 0.8rem; }
+/* wide screens: always four across so rows fill evenly (8 base facets = 2 rows) */
+@media (min-width: 90rem) { .facets { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .facet .list { max-height: 16rem; overflow-y: auto; scrollbar-width: thin; }
 .row {
   position: relative;
@@ -126,8 +128,10 @@ body:not(.show-ms) .ms { display: none; }
 .facet .list .row { margin: 0; }
 
 /* ---- charts / map row --------------------------------------------------- */
-.viz { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0.8rem; margin-bottom: 0.8rem; }
+/* charts left, map right; the map gets the wider column and stretches to the charts' height */
+.viz { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0.8rem; margin-bottom: 0.8rem; align-items: stretch; }
 .viz .stack { display: grid; grid-auto-rows: auto; gap: 0.8rem; min-width: 0; align-content: start; }
+.viz .map { display: flex; flex-direction: column; }
 .panel[hidden] { display: none; }
 @media (max-width: 70rem) { .viz { grid-template-columns: 1fr; } }
 .chart svg { display: block; width: 100%; height: auto; }
@@ -137,13 +141,13 @@ body:not(.show-ms) .ms { display: none; }
 .legend span.selected { background: var(--accent-tint); font-weight: 600; }
 .legend i { width: 0.65rem; height: 0.65rem; border-radius: 2px; display: inline-block; }
 .brush { fill: rgba(1, 107, 131, 0.12); stroke: var(--accent); stroke-width: 1; }
-.map .mapbox { position: relative; height: 34rem; border-radius: 6px; overflow: hidden; background: #eef3f5; }
+.map .mapbox { position: relative; flex: 1 1 auto; min-height: 26rem; border-radius: 6px; overflow: hidden; background: #eef3f5; }
 .map .tip {
   position: absolute; z-index: 5; pointer-events: none; background: var(--text-strong); color: #fff;
   font-size: 0.72rem; padding: 0.25rem 0.5rem; border-radius: 4px; white-space: nowrap; transform: translate(-50%, -140%);
 }
 .map .maplibregl-ctrl-attrib { font-size: 0.6rem; }
-@media (max-width: 70rem) { .map .mapbox { height: 26rem; } }
+@media (max-width: 70rem) { .map .mapbox { min-height: 22rem; } }
 
 /* ---- table ------------------------------------------------------------ */
 .grid .scroller { max-height: 30rem; overflow: auto; border-top: 1px solid var(--border-soft); }

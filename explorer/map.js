@@ -33,6 +33,9 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
   });
   map.addControl(new NavigationControl({ showCompass: false }), "top-right");
   map.on("error", (e) => console.warn("maplibre:", e.error?.message ?? e));
+  // the panel's final size depends on web fonts and the charts beside it; re-measure once they settle
+  document.fonts?.ready.then(() => map.resize());
+  window.addEventListener("load", () => map.resize());
   map.once("idle", () => console.info("maplibre: basemap idle", style === BLANK_STYLE ? "(blank style)" : "(positron)", Object.keys(style.sources).join(",")));
   map.touchZoomRotate.disableRotation();
   let pending = null;
