@@ -81,6 +81,7 @@ header.bar {
 .chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.3rem 0.15rem 0.6rem; border-radius: 999px; background: var(--accent-tint); color: var(--accent-dark); font-size: 0.75rem; border: 1px solid transparent; }
 .chip .x { display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; border: 0; background: rgba(0, 36, 48, 0.08); color: var(--accent-dark); font-weight: 700; font-size: 0.8rem; line-height: 1; cursor: pointer; }
 .chip .x:hover { background: var(--pop); color: #fff; }
+.chip a.ext, td a.ext { color: var(--accent); font-weight: 600; white-space: nowrap; }
 
 /* ---- panels ------------------------------------------------------------ */
 .panel {
@@ -147,6 +148,21 @@ body:not(.show-ms) .ms { display: none; }
   font-size: 0.72rem; padding: 0.25rem 0.5rem; border-radius: 4px; white-space: nowrap; transform: translate(-50%, -140%);
 }
 .map .maplibregl-ctrl-attrib { font-size: 0.6rem; }
+.map .maplibregl-popup-content { font-family: var(--font); font-size: 0.78rem; color: var(--text); padding: 0.5rem 0.7rem; border-radius: 8px; box-shadow: var(--card-shadow); }
+.map .plant-hover .maplibregl-popup-content { pointer-events: none; }
+.map .pp-hint { color: var(--text-faint); font-size: 0.7rem; }
+.map .pp-card h4 { margin: 0 0.9rem 0.1rem 0; font-size: 0.9rem; color: var(--text-strong); }
+.map .pp-card h4 small { color: var(--text-faint); font-weight: 500; }
+.map .pp-sub { color: var(--text-muted); font-size: 0.72rem; margin-bottom: 0.4rem; }
+.map .pp-rows { font-size: 0.74rem; }
+.map .pp-rows div { display: flex; justify-content: space-between; gap: 1rem; padding: 0.05rem 0; border-top: 1px solid var(--border-soft); }
+.map .pp-rows span:first-child { color: var(--text-faint); }
+.map .pp-rows span:last-child { text-align: right; font-variant-numeric: tabular-nums; max-width: 14rem; }
+.map .pp-actions { display: flex; gap: 0.4rem; margin-top: 0.45rem; flex-wrap: wrap; }
+.map .pp-btn { font: inherit; font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.6rem; border-radius: 999px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; }
+.map .pp-btn.secondary { background: var(--surface); color: var(--accent-dark); }
+.map .pp-btn:hover { filter: brightness(0.95); text-decoration: none; }
+.map .maplibregl-popup-close-button { font-size: 1.1rem; padding: 0 0.4rem; }
 @media (max-width: 70rem) { .map .mapbox { min-height: 22rem; } }
 
 /* ---- table ------------------------------------------------------------ */

@@ -1,7 +1,8 @@
 // MapLibre plant map. Positron basemap (same as gem-explorer), one circle per plant × fuel,
-// radius ∝ √measure, colour by fuel. Falls back to a blank background style when the
-// basemap cannot be fetched (offline, blocked), so the dots still render.
-import { Map as MLMap, NavigationControl } from "./vendor/maplibre/maplibre-gl.mjs";
+// radius ∝ √measure, colour by fuel. Hover shows a tooltip that stays while the pointer is on
+// the dot; click pins a popup that the app fills with details (GEM wiki link, drill-in button).
+// Falls back to a blank background style when the basemap cannot be fetched, so dots still render.
+import { Map as MLMap, NavigationControl, Popup } from "./vendor/maplibre/maplibre-gl.mjs";
 
 const STYLE_URL = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const BLANK_STYLE = { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#eef3f5" } }] };
@@ -22,10 +23,11 @@ async function fetchStyle() {
 }
 
 /**
- * createPlantMap(container, { onHover(props|null, lngLat), onClick(props) }) -> { update(features), ready }
- * features: [{ p, f, lat, lon, v, r, c }]  (r = radius px, c = colour)
+ * createPlantMap(container, { hoverHtml(props) -> string, clickHtml(props) -> Promise<string|Node> })
+ *   -> { map, update(points), fitUS() }
+ * points: [{ p, f, lat, lon, v, r, c }]  (r = radius px at zoom 3, c = colour)
  */
-export async function createPlantMap(container, { onHover, onClick } = {}) {
+export async function createPlantMap(container, { hoverHtml, clickHtml } = {}) {
   const style = await fetchStyle();
   const map = new MLMap({
     container, style, bounds: US_BOUNDS, fitBoundsOptions: { padding: 10 },
@@ -33,13 +35,17 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
   });
   map.addControl(new NavigationControl({ showCompass: false }), "top-right");
   map.on("error", (e) => console.warn("maplibre:", e.error?.message ?? e));
-  // the panel's final size depends on web fonts and the charts beside it; re-measure once they settle
+  map.once("idle", () => console.info("maplibre: basemap idle", style === BLANK_STYLE ? "(blank style)" : "(positron)", Object.keys(style.sources).join(",")));
   document.fonts?.ready.then(() => map.resize());
   window.addEventListener("load", () => map.resize());
-  map.once("idle", () => console.info("maplibre: basemap idle", style === BLANK_STYLE ? "(blank style)" : "(positron)", Object.keys(style.sources).join(",")));
   map.touchZoomRotate.disableRotation();
+
+  const hover = new Popup({ closeButton: false, closeOnClick: false, offset: 8, className: "plant-hover", maxWidth: "22rem" });
+  const pinned = new Popup({ closeButton: true, closeOnClick: true, offset: 10, className: "plant-pin", maxWidth: "26rem" });
+  let hoverTimer = null, hoverP = null;
+
   let pending = null;
-  const ready = new Promise((res) => map.on("load", () => {
+  await new Promise((res) => map.on("load", () => {
     map.addSource("plants", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     map.addLayer({
       id: "plants", type: "circle", source: "plants",
@@ -51,16 +57,39 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
         "circle-stroke-width": 0.6,
       },
     });
-    map.on("mousemove", "plants", (e) => { map.getCanvas().style.cursor = "pointer"; onHover?.(e.features[0].properties, e.lngLat); });
-    map.on("mouseleave", "plants", () => { map.getCanvas().style.cursor = ""; onHover?.(null); });
-    map.on("click", "plants", (e) => onClick?.(e.features[0].properties));
+    map.on("mousemove", "plants", (e) => {
+      map.getCanvas().style.cursor = "pointer";
+      clearTimeout(hoverTimer);
+      if (pinned.isOpen()) return; // a pinned popup owns the screen
+      const f = e.features[0];
+      hoverP = f.properties.p;
+      hover.setLngLat(f.geometry.coordinates).setHTML(hoverHtml?.(f.properties) ?? "").addTo(map);
+    });
+    map.on("mouseleave", "plants", () => {
+      map.getCanvas().style.cursor = "";
+      // linger briefly so the pointer can cross a gap between dots without flicker
+      hoverTimer = setTimeout(() => hover.remove(), 700);
+    });
+    map.on("click", "plants", async (e) => {
+      const f = e.features[0];
+      hover.remove();
+      // the card is tall and arrives after the popup opens: anchor it away from the nearest map edge up front
+      const { x, y } = e.point, w = map.getContainer().clientWidth, h = map.getContainer().clientHeight;
+      pinned.options.anchor = (y > h * 0.4 ? "bottom" : "top") + (x > w * 0.7 ? "-right" : x < w * 0.3 ? "-left" : "");
+      pinned.setLngLat(f.geometry.coordinates).setHTML('<div class="pp-loading">loading…</div>').addTo(map);
+      const content = await clickHtml?.(f.properties);
+      if (!pinned.isOpen()) return;
+      if (typeof content === "string") pinned.setHTML(content); else if (content) pinned.setDOMContent(content);
+    });
     if (pending) { map.getSource("plants").setData(pending); pending = null; }
     res();
   }));
+
+  let zoomedIn = false;
   function update(points) {
     const data = {
       type: "FeatureCollection",
-      // big dots first in the array draw underneath: sort ascending by radius so small ones stay clickable
+      // big dots first in the array draw underneath: sort descending by radius so small ones stay clickable
       features: points.slice().sort((a, b) => b.r - a.r).map((q) => ({
         type: "Feature", geometry: { type: "Point", coordinates: [q.lon, q.lat] },
         properties: { p: q.p, f: q.f ?? "", v: q.v, r: q.r, c: q.c },
@@ -68,6 +97,7 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
     };
     const src = map.getSource("plants");
     if (src) src.setData(data); else pending = data;
+    pinned.remove(); hover.remove();
     // a handful of points (a plant drill-down): fly to them; otherwise stay where the user left the view
     if (points.length && points.length <= 10) {
       const lons = points.map((q) => q.lon), lats = points.map((q) => q.lat);
@@ -75,6 +105,7 @@ export async function createPlantMap(container, { onHover, onClick } = {}) {
     } else if (zoomedIn) { map.fitBounds(US_BOUNDS, { padding: 10, duration: 700 }); }
     zoomedIn = points.length > 0 && points.length <= 10;
   }
-  let zoomedIn = false;
-  return { map, update, ready, fitUS: () => map.fitBounds(US_BOUNDS, { padding: 10, duration: 600 }) };
+  /** Replace the hover tooltip's HTML if it is still showing plant `p` (used when a name arrives asynchronously). */
+  const refreshHover = (p, html) => { if (hover.isOpen() && hoverP === p) hover.setHTML(html); };
+  return { map, update, refreshHover, fitUS: () => map.fitBounds(US_BOUNDS, { padding: 10, duration: 600 }) };
 }

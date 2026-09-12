@@ -148,8 +148,33 @@ export function mapSql(filters, measure) {
   );
 }
 
+/** Everything the map popup shows for one plant, under the current filters (except the plant filter itself). */
+export function plantCardSql(plantId, filters) {
+  const f = new Map(filters); f.delete("plant");
+  return (
+    `select plant_name_eia as name, state as state, utility_name_eia as utility, ba_code as ba, gem_wiki_url as wiki, gem_plant_name as gem, ` +
+    `min(year) as y0, max(year) as y1, max(n_months) as m_last, ` +
+    `round(sum(net_generation_mwh)/1000000.0, 2) as twh, round(sum(capacity_mw_months)/1000.0, 3) as gw_months, ` +
+    `round(sum(net_generation_mwh)/(sum(capacity_mw_months)*730.5), 3) as cf, round(sum(co2_tons)/1000000.0, 3) as co2_mt, ` +
+    `round(sum(co2_tons)/sum(case when co2_tons is not null then net_generation_mwh end), 3) as co2_mwh, ` +
+    `round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 1) as opex_mwh, ` +
+    `min(first_operating_year) as first_year ` +
+    `from t ${whereClause(f, { extra: `plant_id_eia = ${Number(plantId)}` })} ` +
+    `group by plant_name_eia, state, utility_name_eia, ba_code, gem_wiki_url, gem_plant_name order by twh desc limit 1`
+  );
+}
+
+/** Technology mix of one plant under the current filters: avg MW per technology (capacity-months / months later). */
+export function plantTechSql(plantId, filters) {
+  const f = new Map(filters); f.delete("plant");
+  return (
+    `select technology_description as k, round(sum(capacity_mw_months), 1) as cap_months, round(sum(net_generation_mwh)/1000000.0, 3) as twh ` +
+    `from t ${whereClause(f, { extra: `plant_id_eia = ${Number(plantId)}` })} group by technology_description order by cap_months desc limit 8`
+  );
+}
+
 export function plantNameSql(plantId) {
-  return `select plant_name_eia as name, state as state from t where plant_id_eia = ${Number(plantId)} limit 1`;
+  return `select plant_name_eia as name, state as state, gem_wiki_url as wiki, gem_plant_name as gem from t where plant_id_eia = ${Number(plantId)} order by year desc limit 1`;
 }
 
 export const GRID_COLS = [
@@ -170,6 +195,7 @@ export const GRID_COLS = [
   { col: "fuel_cost_per_mwh", label: "$/MWh", numeric: true, digits: 1 },
   { col: "co2_tons", label: "CO₂ t", numeric: true, digits: 0 },
   { col: "co2_tons_per_mwh", label: "t/MWh", numeric: true, digits: 3 },
+  { col: "gem_wiki_url", label: "GEM", external: true },
 ];
 
 export function gridSql(filters, sort, limit = 100) {

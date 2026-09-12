@@ -23,6 +23,29 @@ CREATE OR REPLACE TABLE grp AS
          min(year(generator_operating_date)) AS first_operating_year
   FROM g GROUP BY 1, 2, 3, 4;
 
+-- GEM wiki links: data/gem_us_plants_eia.csv is exported from GEM's database (US plants carrying an EIA plant id).
+-- GEM often splits a site by technology, so pick, per EIA plant x PUDL fuel type, the GEM plant whose fuel
+-- categories match (largest first), else the largest GEM plant at that EIA id.
+CREATE OR REPLACE TABLE gem_raw AS
+  SELECT try_cast(trim(eia_plant_id) AS BIGINT) AS plant_id_eia, gem_plant_id, gem_plant_name, gem_wiki_url,
+         gem_total_mw, gem_operating_mw,
+         regexp_split_to_array(trim(both '{}' FROM fuel_categories), ',') AS cats
+  FROM read_csv('data/gem_us_plants_eia.csv', header = true, all_varchar = true)
+  WHERE gem_wiki_url <> '';
+CREATE OR REPLACE TABLE fuel_cat AS SELECT * FROM (VALUES
+  ('coal','2'), ('gas','3'), ('oil','4'), ('solar','7'), ('wind','8'), ('nuclear','9'), ('hydro','11'),
+  ('waste','1'), ('other','5'), ('other','6'), ('other','10')) t(fuel_type_code_pudl, cat);
+CREATE OR REPLACE TABLE gem_link AS
+  WITH fuels AS (SELECT DISTINCT plant_id_eia, fuel_type_code_pudl FROM g),
+  cand AS (
+    SELECT f.plant_id_eia, f.fuel_type_code_pudl, r.gem_plant_id, r.gem_plant_name, r.gem_wiki_url,
+           CASE WHEN EXISTS (SELECT 1 FROM fuel_cat fc WHERE fc.fuel_type_code_pudl = f.fuel_type_code_pudl AND list_contains(r.cats, fc.cat)) THEN 1 ELSE 2 END AS match_rank,
+           try_cast(r.gem_total_mw AS DOUBLE) AS mw
+    FROM fuels f JOIN gem_raw r USING (plant_id_eia))
+  SELECT plant_id_eia, fuel_type_code_pudl, gem_plant_id, gem_plant_name, gem_wiki_url
+  FROM (SELECT *, row_number() OVER (PARTITION BY plant_id_eia, fuel_type_code_pudl ORDER BY match_rank, mw DESC NULLS LAST) AS rn FROM cand)
+  WHERE rn = 1;
+
 COPY (
   WITH base AS (
   SELECT g.plant_id_eia, g.technology_description, g.operational_status, g.year,
@@ -65,7 +88,7 @@ COPY (
   ),
   ferc AS (SELECT * FROM 'data/ferc_plant_tech_year.parquet'),
   cems AS (SELECT * FROM 'data/cems_plant_tech_year.parquet')
-  SELECT base.*,
+  SELECT base.*, gem.gem_plant_name, gem.gem_wiki_url,
          ferc.ferc_capex_total, ferc.ferc_opex_fuel, ferc.ferc_opex_nonfuel, ferc.ferc_opex_total, ferc.ferc_records, ferc.ferc_allocation,
          cems.co2_tons, cems.so2_tons, cems.nox_tons, cems.cems_gross_mwh, cems.cems_heat_mmbtu, cems.cems_allocation,
          CASE WHEN cems.co2_tons IS NULL OR base.net_generation_mwh IS NULL OR base.net_generation_mwh <= 0 THEN NULL
@@ -83,6 +106,7 @@ COPY (
   LEFT JOIN cems ON cems.plant_id_eia = base.plant_id_eia AND cems.year = base.year
        AND cems.technology_description IS NOT DISTINCT FROM base.technology_description
        AND cems.operational_status IS NOT DISTINCT FROM base.operational_status
+  LEFT JOIN gem_link gem ON gem.plant_id_eia = base.plant_id_eia AND gem.fuel_type_code_pudl IS NOT DISTINCT FROM base.fuel_type_code_pudl
   ORDER BY base.plant_id_eia, base.technology_description, base.operational_status, base.year
 ) TO 'data/plant_tech_year.parquet' (FORMAT parquet, COMPRESSION snappy, ROW_GROUP_SIZE 65536);
 
@@ -120,10 +144,14 @@ COPY (
   GROUP BY g.plant_id_eia, g.generator_id, g.year, g.technology_description, g.operational_status
   )
   SELECT base.*, c.co2_tons, c.so2_tons, c.nox_tons, c.cems_gross_mwh, c.cems_allocation,
-         round(c.co2_tons / nullif(base.net_generation_mwh, 0), 4) AS co2_tons_per_mwh
+         round(c.co2_tons / nullif(base.net_generation_mwh, 0), 4) AS co2_tons_per_mwh,
+         gem.gem_plant_name, gem.gem_wiki_url
   FROM base LEFT JOIN 'data/cems_generator_year.parquet' c USING (plant_id_eia, generator_id, year)
+  LEFT JOIN gem_link gem ON gem.plant_id_eia = base.plant_id_eia AND gem.fuel_type_code_pudl IS NOT DISTINCT FROM base.fuel_type_code_pudl
   ORDER BY base.plant_id_eia, base.generator_id, base.year
 ) TO 'data/generator_year.parquet' (FORMAT parquet, COMPRESSION snappy, ROW_GROUP_SIZE 65536);
 
 SELECT 'plant_tech_year' AS t, count(*) AS n FROM 'data/plant_tech_year.parquet'
-UNION ALL SELECT 'generator_year', count(*) FROM 'data/generator_year.parquet';
+UNION ALL SELECT 'generator_year', count(*) FROM 'data/generator_year.parquet'
+UNION ALL SELECT 'plant_tech_year rows with GEM wiki', count(gem_wiki_url) FROM 'data/plant_tech_year.parquet'
+UNION ALL SELECT 'plants with GEM wiki', count(DISTINCT plant_id_eia) FILTER (WHERE gem_wiki_url IS NOT NULL) FROM 'data/plant_tech_year.parquet';

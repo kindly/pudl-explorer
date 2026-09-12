@@ -111,9 +111,19 @@ hyparquet only decodes Snappy (not zstd), so parquet must be written with
 - **Seasonality**: calendar-month bars summed over the selected years from the
   monthly columns, stacked by fuel. Display only; there is no month filter.
 - **Plants map**: MapLibre GL (vendored 6.9) on Carto's Positron basemap, one
-  circle per plant × fuel with a non-zero value, area ∝ measure, zoom and pan; hover for the name,
-  click to drill into the plant (`plant=<plant_id_eia>`). Falls back to a blank
-  background when the basemap is unreachable.
+  circle per plant × fuel with a non-zero value, area ∝ measure, zoom and pan.
+  Hover shows name, fuel and value (lingers briefly so you can cross gaps);
+  click pins a card with technology mix and MW, years, first online, average
+  capacity, generation, capacity factor, CO₂ and FERC opex under the current
+  filters, a **GEM wiki** link when GEM knows the plant, and a "show only this
+  plant" button. Clicking never changes the filters by itself. Falls back to a
+  blank background when the basemap is unreachable.
+- **GEM wiki links**: `data/gem_us_plants_eia.csv` is exported from GEM's
+  database (US plants that carry an EIA plant id, all with wiki URLs). Because
+  GEM splits sites by technology, each plant × PUDL fuel type picks the GEM
+  plant whose fuel categories match, else the largest at that EIA id. 11,703 of
+  18,937 plants get a link; it appears in the map card, the grid's GEM column and
+  the plant filter chip.
 - **Grid**: top 100 generator-years for the current sort with capacity, MWh,
   capacity factor, heat rate, fuel cost, online and retirement dates. Plant names
   link to the drill-down.

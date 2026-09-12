@@ -6,7 +6,7 @@ import { Facetful } from "./vendor/facetful/index.js";
 import { createPlantMap } from "./map.js";
 import {
   TABLES, DIMS, ALL_DIMS, MEASURES, SEARCH_PARAM, NULL_TOKEN, GRID_COLS,
-  facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, plantNameSql,
+  facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, plantNameSql, plantCardSql, plantTechSql,
 } from "./sql.js";
 
 // ---------------------------------------------------------------- config
@@ -182,12 +182,14 @@ async function q(sql, table = "pty") {
   return { rows: [...r.rows()], ms: r.elapsedMs, raw: r };
 }
 
+const plantWiki = new Map(); // plant_id_eia -> GEM wiki URL (when GEM knows the plant)
 async function plantLabel(id) {
   if (plantNames.has(id)) return plantNames.get(id);
   try {
     const { rows } = await q(plantNameSql(id));
     const label = rows[0] ? `${rows[0].name}, ${rows[0].state}` : `plant ${id}`;
     plantNames.set(id, label);
+    if (rows[0]?.wiki) plantWiki.set(id, rows[0].wiki);
     return label;
   } catch { return `plant ${id}`; }
 }
@@ -410,22 +412,50 @@ panels.push({
   },
 });
 
-// ---- map (MapLibre; one circle per plant x fuel, click to drill into the plant)
-const tip = $("#map .tip");
+// ---- map (MapLibre; hover = quick tooltip, click = pinned card with details, GEM wiki link and a drill-in button)
 let plantMap = null, lastMapPoints = null;
-createPlantMap($("#map .mapbox"), {
-  onHover(props, lngLat) {
-    if (!props) { tip.hidden = true; return; }
-    const { x, y } = plantMap.map.project(lngLat);
-    tip.hidden = false;
-    tip.style.left = `${x}px`; tip.style.top = `${y}px`;
-    const m = MEASURES[state.measure];
-    const val = `${props.f || "(blank)"} · ${compact(props.v, 2)} ${m.unit}`;
-    tip.textContent = `${plantNames.get(props.p) ?? "plant " + props.p} · ${val}`;
-    if (!plantNames.has(props.p)) plantLabel(props.p).then((label) => { if (tip.textContent.startsWith(`plant ${props.p} `)) tip.textContent = `${label} · ${val}`; });
-  },
-  onClick(props) { toggle("plant", String(props.p)); },
-}).then((m) => { plantMap = m; if (lastMapPoints) m.update(lastMapPoints); })
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+function hoverHtml(props) {
+  const m = MEASURES[state.measure];
+  const body = `${esc(props.f || "(blank)")} · ${esc(compact(props.v, 2))} ${esc(m.unit)}<br><span class="pp-hint">click for details</span>`;
+  if (!plantNames.has(props.p)) {
+    // name not cached yet: show a placeholder and swap it in when the lookup returns
+    plantLabel(props.p).then((label) => plantMap?.refreshHover(props.p, `<b>${esc(label)}</b><br>${body}`));
+    return `<b>…</b><br>${body}`;
+  }
+  return `<b>${esc(plantNames.get(props.p))}</b><br>${body}`;
+}
+async function clickHtml(props) {
+  const id = props.p;
+  const [{ rows }, techs] = await Promise.all([q(plantCardSql(id, state.filters)), q(plantTechSql(id, state.filters))]);
+  const r = rows[0];
+  if (!r) return `<b>plant ${id}</b><br>no rows under the current filters`;
+  plantNames.set(id, `${r.name}, ${r.state}`);
+  if (r.wiki) plantWiki.set(id, r.wiki);
+  const months = r.y1 === maxYear ? (r.y1 - r.y0) * 12 + (r.m_last || 12) : (r.y1 - r.y0 + 1) * 12;
+  const row = (k, v) => (v == null || v === "" ? "" : `<div><span>${k}</span><span>${v}</span></div>`);
+  const card = el("div", { class: "pp-card" });
+  card.innerHTML =
+    `<h4>${esc(r.name)} <small>${esc(r.state)}</small></h4>` +
+    `<div class="pp-sub">${esc(r.utility ?? "")}${r.ba ? " · " + esc(r.ba) : ""}</div>` +
+    `<div class="pp-rows">` +
+    row("technology", techs.rows.map((t) => `${esc(t.k ?? "(blank)")} ${t.cap_months ? "· " + fmtN((t.cap_months / months), 0) + " MW" : ""}`).join("<br>")) +
+    row("years", r.y0 === r.y1 ? r.y0 : `${r.y0}–${r.y1}`) +
+    row("first online", r.first_year) +
+    row("avg capacity", r.gw_months != null ? `${fmtN((r.gw_months / months) * 1000, 0)} MW` : null) +
+    row("generation", r.twh != null ? `${fmtN(r.twh, 2)} TWh` : null) +
+    row("capacity factor", r.cf != null ? fmtN(r.cf * 100, 0) + "%" : null) +
+    row("CO₂ (CEMS)", r.co2_mt != null ? `${fmtN(r.co2_mt, 2)} Mt · ${fmtN(r.co2_mwh, 2)} t/MWh` : null) +
+    row("opex (FERC 1)", r.opex_mwh != null ? `$${fmtN(r.opex_mwh, 1)}/MWh` : null) +
+    `</div>`;
+  const actions = el("div", { class: "pp-actions" });
+  if (r.wiki) actions.append(el("a", { href: r.wiki, target: "_blank", rel: "noopener", class: "pp-btn" }, `GEM wiki: ${r.gem && r.gem !== r.name ? r.gem : "page"} ↗`));
+  actions.append(el("button", { type: "button", class: "pp-btn secondary", onclick: () => toggle("plant", String(id)) }, "show only this plant"));
+  card.append(actions);
+  return card;
+}
+createPlantMap($("#map .mapbox"), { hoverHtml, clickHtml })
+  .then((m) => { plantMap = m; window.__plantMap = m; if (lastMapPoints) m.update(lastMapPoints); })
   .catch((e) => { console.error("map failed", e); $("#map .sub").textContent = `map unavailable: ${e.message}`; });
 $("#map .legend").replaceChildren(...FUEL_ORDER.filter((f) => f).map((f) => el("span", {}, el("i", { style: `background:${fuelColor(f)}` }), f)));
 panels.push({
@@ -441,7 +471,7 @@ panels.push({
       return { p: r.p, f: r.f, lat: r.lat, lon: r.lon, v, r: 1.5 + 9 * Math.sqrt(Math.max(0, v) / maxV), c: fuelColor(r.f) };
     });
     plantMap?.update(lastMapPoints);
-    $("#map .sub").textContent = `${fmtInt.format(lastMapPoints.length)} plant × fuel points with ${measure.label.toLowerCase()} > 0, area ∝ value. Hover for the plant, click to drill in.`;
+    $("#map .sub").textContent = `${fmtInt.format(lastMapPoints.length)} plant × fuel points with ${measure.label.toLowerCase()} > 0, area ∝ value. Hover for a summary, click for details.`;
   },
 });
 
@@ -464,7 +494,10 @@ panels.push({
       th.classList.toggle("sorted", state.sort[0] === c.col);
       th.querySelector(".arrow").textContent = state.sort[0] === c.col ? (state.sort[1] === "desc" ? "▼" : "▲") : "";
     }
-    for (const r of rows) if (r.plant_name_eia) plantNames.set(r.plant_id_eia, `${r.plant_name_eia}, ${r.state}`);
+    for (const r of rows) {
+      if (r.plant_name_eia) plantNames.set(r.plant_id_eia, `${r.plant_name_eia}, ${r.state}`);
+      if (r.gem_wiki_url) plantWiki.set(r.plant_id_eia, r.gem_wiki_url);
+    }
     tbody.replaceChildren(...rows.map((r) => el("tr", {}, ...GRID_COLS.map((c) => {
       let v = r[c.col];
       if (c.date && v) v = String(v).slice(0, 7);
@@ -472,6 +505,7 @@ panels.push({
       else if (c.numeric) v = v == null ? "" : fmtN(v, c.digits);
       const cell = el("td", { class: c.numeric ? "numeric" : "", title: v == null ? "" : String(r[c.col]) }, v == null ? "" : String(v));
       if (c.link && v != null) { cell.replaceChildren(el("a", { href: "#", title: "show only this plant", onclick: (e) => { e.preventDefault(); toggle("plant", String(r.plant_id_eia)); } }, String(v))); }
+      if (c.external) cell.replaceChildren(v ? el("a", { href: String(v), target: "_blank", rel: "noopener", class: "ext", title: `GEM wiki: ${String(v).split("/").pop().replace(/_/g, " ")}` }, "wiki ↗") : "");
       return cell;
     }))));
     $("#grid .count").textContent = rows.length ? `top ${rows.length} generator-years by ${GRID_COLS.find((c) => c.col === state.sort[0]).label} ${state.sort[1]}` : "";
@@ -488,8 +522,15 @@ function renderChips() {
       let label;
       if (k === SEARCH_PARAM) label = `search: ${v}`;
       else if (k === "plant") {
-        label = `plant: ${plantNames.get(Number(v)) ?? v}`;
-        if (!plantNames.has(Number(v)) && db) plantLabel(Number(v)).then(renderChips);
+        const id = Number(v);
+        label = `plant: ${plantNames.get(id) ?? v}`;
+        if (!plantNames.has(id) && db) plantLabel(id).then(renderChips);
+        if (plantWiki.has(id)) {
+          chips.push(el("span", { class: "chip" }, label, " ",
+            el("a", { href: plantWiki.get(id), target: "_blank", rel: "noopener", class: "ext", title: "open the GEM wiki page" }, "GEM wiki ↗"),
+            el("button", { class: "x", type: "button", title: "remove this filter", onclick: () => toggle(k, v) }, "×")));
+          continue;
+        }
       } else label = `${dim?.title ?? k}: ${v === NULL_TOKEN ? "(blank)" : k === "decade" ? v + "s" : v.replace("..", "–")}`;
       chips.push(el("span", { class: "chip" }, label, el("button", { class: "x", type: "button", title: "remove this filter", onclick: () => toggle(k, v) }, "×")));
     }

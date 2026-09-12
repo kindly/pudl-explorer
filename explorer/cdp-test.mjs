@@ -63,6 +63,7 @@ if (ready) {
   console.log("totals:", await evalJs(`[...document.querySelectorAll('#totals .total')].map(t => t.textContent.trim().replace(/\\s+/g,' ')).join(' | ')`));
   console.log("facets:", await evalJs(`[...document.querySelectorAll('.facet')].map(f => f.querySelector('h3').firstChild.textContent + ':' + f.querySelectorAll('.row').length).join(', ')`));
   console.log("fuel rows:", await evalJs(`[...document.querySelectorAll('.facet .row')].slice(0,10).map(r => r.textContent.trim().replace(/\\s+/g,' ')).join(' ; ')`));
+  for (let i = 0; i < 60; i++) { await sleep(500); if (await evalJs(`document.querySelectorAll('#grid tbody tr').length > 0`)) break; }
   console.log("grid rows:", await evalJs(`document.querySelectorAll('#grid tbody tr').length`), "first:", await evalJs(`document.querySelector('#grid tbody tr')?.textContent.trim().replace(/\\s+/g,' ').slice(0,200)`));
   console.log("map points:", await evalJs(`document.querySelector('#map .sub').textContent`), "| maplibre canvas:", await evalJs(`!!document.querySelector('#map canvas.maplibregl-canvas')`));
   console.log("season sub:", await evalJs(`document.querySelector('#month-chart .sub').textContent`), "| bars:", await evalJs(`document.querySelectorAll('#month-chart svg rect').length`));
@@ -74,6 +75,18 @@ if (ready) {
   await evalJs(`document.getElementById('map').scrollIntoView({block: 'start'}); true`);
   await sleep(2500);
   { const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }); writeFileSync(join(outDir, "shot-map.png"), Buffer.from(r.data, "base64")); console.log("screenshot shot-map.png"); }
+  // click Grand Gulf (nuclear, MS) on the map through a real mouse event; expect the pinned card with a GEM wiki link
+  {
+    const pt = await evalJs(`(() => { const m = window.__plantMap?.map; if (!m) return null; const p = m.project([-91.048, 32.007]); const r = m.getCanvas().getBoundingClientRect(); return { x: r.left + p.x, y: r.top + p.y }; })()`);
+    if (pt) {
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
+      await sleep(600);
+      console.log("hover tip:", await evalJs(`document.querySelector('.plant-hover')?.innerText.replace(/\\s+/g, ' ').slice(0, 120) ?? 'none'`));
+      for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+      await sleep(1500);
+      console.log("map card:", await evalJs(`document.querySelector('.plant-pin .pp-card')?.innerText.replace(/\\s+/g, ' ').slice(0, 260) ?? 'no card'`), "| wiki link:", await evalJs(`document.querySelector('.plant-pin a.pp-btn')?.href ?? 'none'`), "| url still:", await evalJs(`location.search`));
+    } else console.log("map card: no map");
+  }
   console.log("map canvas:", await evalJs(`(() => { const c = document.querySelector('#map canvas'); return c ? c.width + 'x' + c.height : 'no canvas'; })()`), "| maplibre logs:", logs.filter((l) => /maplibre/.test(l)).length);
   // click the "coal" fuel facet row, then a state, and re-check
   await evalJs(`(() => { const r = [...document.querySelectorAll('.facet .row')].find(r => r.textContent.trim().startsWith('coal')); r.click(); return !!r; })()`);
@@ -106,8 +119,39 @@ if (ready) {
   console.log("settle:", await evalJs(`document.getElementById('settle').textContent`));
   await sleep(1500); // map fly-to
   await shot("shot-3-drilldown.png");
+  // with the map flown to Grand Gulf, click its (now isolated) dot: card must carry the GEM wiki link
+  {
+    await evalJs(`document.getElementById('map').scrollIntoView({block: 'start'}); true`);
+    await sleep(800);
+    const pt = await evalJs(`(() => { const m = window.__plantMap?.map; if (!m) return null; const p = m.project([-91.048, 32.007]); const r = m.getCanvas().getBoundingClientRect(); return { x: r.left + p.x, y: r.top + p.y }; })()`);
+    if (pt) {
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
+      await sleep(800);
+      console.log("hover tip (zoomed):", await evalJs(`document.querySelector('.plant-hover')?.innerText.replace(/\\s+/g, ' ').slice(0, 120) ?? 'none'`));
+      for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+      await sleep(1500);
+      console.log("card (zoomed):", await evalJs(`document.querySelector('.plant-pin .pp-card')?.innerText.replace(/\\s+/g, ' ').slice(0, 200) ?? 'no card'`), "| wiki link:", await evalJs(`document.querySelector('.plant-pin a.pp-btn')?.href ?? 'none'`));
+      const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }); writeFileSync(join(outDir, "shot-card.png"), Buffer.from(r.data, "base64")); console.log("screenshot shot-card.png");
+    }
+  }
   await evalJs(`document.getElementById('clear-all').click(); true`);
   await sleep(1500);
+  // Barry Steam Plant (EIA 3, AL): a plant GEM knows — card must show the GEM wiki link
+  await evalJs(`location.search = '?plant=3'; true`);
+  for (let i = 0; i < 100; i++) { await sleep(300); if (await evalJs(`document.getElementById('loading')?.hidden && document.getElementById('settle').textContent && !!window.__plantMap`)) break; }
+  await sleep(2000);
+  {
+    await evalJs(`document.getElementById('map').scrollIntoView({block: 'start'}); true`);
+    await sleep(800);
+    const pt = await evalJs(`(() => { const m = window.__plantMap?.map; if (!m) return null; const p = m.project([-88.0103, 31.0069]); const r = m.getCanvas().getBoundingClientRect(); return { x: r.left + p.x, y: r.top + p.y }; })()`);
+    if (pt) {
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
+      for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x: pt.x, y: pt.y, button: "left", clickCount: 1 });
+      await sleep(1500);
+      console.log("Barry card:", await evalJs(`document.querySelector('.plant-pin .pp-card')?.innerText.replace(/\\s+/g, ' ').slice(0, 160) ?? 'no card'`), "| wiki link:", await evalJs(`document.querySelector('.plant-pin a.pp-btn')?.href ?? 'none'`), "| chip:", await evalJs(`document.querySelector('.chip')?.innerText.replace(/\\s+/g, ' ')`));
+      const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }); writeFileSync(join(outDir, "shot-card.png"), Buffer.from(r.data, "base64")); console.log("screenshot shot-card.png (Barry)");
+    }
+  }
   // year-range filter: measures the cost of losing row-group pruning on the generator-sorted image
   await evalJs(`location.search = '?year=2018..2024'; true`);
   for (let i = 0; i < 300; i++) { await sleep(500); if (await evalJs(`document.getElementById('loading')?.hidden && document.getElementById('settle').textContent`)) break; }
