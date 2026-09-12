@@ -55,9 +55,12 @@ python3 -m http.server 8766 --bind 127.0.0.1   # any static server rooted at the
 xdg-open http://localhost:8766/explorer/
 ```
 
-On the tailnet it is proxied by `tailscale serve --https=8444 http://127.0.0.1:8766`
-at https://lenovo.tail6804fa.ts.net:8444/explorer/ (tailnet only, not Funnel).
-HTTPS matters: OPFS caching needs a secure context.
+On the tailnet it is served straight from the directory by
+`tailscale serve --bg --https=8444 /home/david/projects/pudl` (no local server
+process) at https://lenovo.tail6804fa.ts.net:8444/explorer/ (tailnet only, not
+Funnel). tailscale's file server sends the right types for `.mjs`, `.wasm` and
+`.gz`. HTTPS matters: OPFS caching needs a secure context. The public copy is
+https://kindly.github.io/pudl-explorer/.
 
 There is no build step. `explorer/` is plain ES modules; `vendor/` holds a copy
 of `browserdb/js/facetful` (with one patch, see below) and hyparquet 1.29.2
