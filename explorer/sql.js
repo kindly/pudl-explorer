@@ -207,7 +207,11 @@ export function yearSql(filters, measure) {
     if (measure.ratio) {
       const [num, den] = measure.ratio;
       const scale = measure.scale === 1 ? "" : ` * ${measure.scale}`;
-      return `round(sum(${num}_${y}) / nullif(sum(case when has_cems = 1 then ${den}_${y} else 0 end), 0)${scale}, 4) as y${y}`;
+      // The gate belongs to the measure, exactly as in measureExpr. This used to hardcode the CEMS
+      // condition, which for capacity factor divided all generation by monitored capacity only:
+      // solar read 4,787% in 2023 instead of 18.3%, and fuels with no monitor at all read zero.
+      const gated = measure.gate ? `sum(case when ${measure.gate} then ${den}_${y} else 0 end)` : `sum(${den}_${y})`;
+      return `round(sum(${num}_${y}) / nullif(${gated}, 0)${scale}, 4) as y${y}`;
     }
     return `round(sum(${measure.prefix}_${y})/${measure.scale}.0, 3) as y${y}`;
   };

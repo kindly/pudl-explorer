@@ -21,5 +21,23 @@ for (const r of rows) {
   if (off > 0.02) bad++;
   console.log(`${String(r.f).padEnd(10)} ${String(r.measure_cf).padStart(7)} ${String(r.direct_cf).padStart(7)} ${String(r.n).padStart(6)}${off > 0.02 ? "   MISMATCH" : ""}`);
 }
-console.log(bad ? `\n${bad} mismatches` : "\nthe cf measure agrees with the direct calculation");
+
+// The year chart has its own per-year expression; it once hardcoded the CEMS gate, which divided all
+// generation by monitored capacity only. Every yearly capacity factor must be a real percentage.
+const { yearSql, MEASURES: M2 } = await import("./sql.js");
+const yr = q(yearSql(new Map(), M2.cf).replace(/^select/, "select"));
+const bads = [];
+for (const row of yr) for (const [k, v] of Object.entries(row)) {
+  if (!/^y\d{4}$/.test(k) || v == null) continue;
+  if (v < 0 || v > 100) bads.push(`${row.f} ${k.slice(1)} = ${v}`);
+}
+const fuels = new Set(yr.filter((r) => YEARS.some((y) => (r[`y${y}`] ?? 0) > 0)).map((r) => r.f));
+for (const need of ["nuclear", "hydro", "wind", "solar", "coal", "gas"]) {
+  if (!fuels.has(need)) { bads.push(`${need} has no yearly capacity factor at all`); }
+}
+console.log(bads.length ? `\nyearly capacity factor out of range:\n  ${bads.slice(0, 8).join("\n  ")}`
+  : `\nevery yearly capacity factor is within 0-100% across ${fuels.size} fuels`);
+bad += bads.length;
+
+console.log(bad ? `\n${bad} problems` : "\nthe cf measure agrees with the direct calculation");
 process.exit(bad ? 1 : 0);

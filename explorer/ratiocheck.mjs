@@ -34,6 +34,8 @@ const chart = `({
   sub: document.querySelector('#year-chart .sub').textContent.slice(0, 70),
   mapSub: document.querySelector('#map .sub').textContent.slice(0, 90),
   sparks: [...document.querySelectorAll('#grid .ghead > span')].map(s=>s.firstChild.textContent.trim()).filter(h=>/yearly$/.test(h)),
+  axisTop: Math.max(...[...document.querySelectorAll('#year-chart svg text')]
+    .map(t => parseFloat(String(t.textContent).replace(/[^0-9.]/g, ''))).filter(n => !isNaN(n) && n < 1900)),
 })`;
 
 console.log("--- measures that can be added up ---");
@@ -46,6 +48,8 @@ for (const k of ["cf", "co2_mwh", "co2_mw"]) {
   await setMeasure(k); const c = await ev(chart);
   say(c.lines >= 3 && c.bars <= 17, `${k}: ${c.lines} line paths, ${c.bars} dim rects — "${c.sub}"`);
   say(/area ∝ (capacity|CO₂|generation)/.test(c.mapSub), `${k}: map — "${c.mapSub}"`);
+  // a capacity factor is a percentage; a gate on the wrong side of the ratio once put it in the thousands
+  if (k === "cf") say(c.axisTop > 40 && c.axisTop <= 100, `cf: year axis tops out at ${c.axisTop}%`);
 }
 console.log("--- the capacity factor sparkline is measure-driven ---");
 await setMeasure("twh");
