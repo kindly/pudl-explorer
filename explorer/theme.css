@@ -61,7 +61,9 @@ header.bar {
 .search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
 .search .hint { position: absolute; right: 0.6rem; top: 0.55rem; font-size: 0.7rem; color: var(--text-faint); }
 .totals { display: flex; gap: 1.5rem; margin-left: auto; align-items: baseline; flex-wrap: wrap; }
-.total { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; }
+/* figure and label share a left edge: right-aligning a 1.35rem number over a 0.7rem label reads as
+   ragged once the row wraps, which it does on a phone */
+.total { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
 .total .fig { color: var(--text-strong); font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .total .lbl { color: var(--text-faint); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .clear-all {
