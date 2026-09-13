@@ -22,7 +22,10 @@ for (const [mk, m] of Object.entries(MEASURES)) for (const [sl, f] of states) {
     // the sort key can belong to a column the measure no longer shows; it must degrade, not break
     ["gw", gridSql(f, ["co2_mt", "desc"], { measure: mk })], ["gw", gridSql(f, ["tbtu", "asc"], { measure: mk })],
     ["gw", plantCardSql(3, f)], ["gw", plantTechSql(3, f)], ["pty", plantFercSql(3, f)], ["gw", plantNameSql(3)],
-    ...DIMS.filter((d) => !d.group || d.group === m.group).flatMap((d) => ["k", "n", "v"].map((s) => [m.table, facetSql(d, f, m, s)])),
+    // every facet column, both directions, plus the bare-letter form older URLs still carry
+    ...DIMS.filter((d) => !d.group || d.group === m.group).flatMap((d) =>
+      [["k", "asc"], ["k", "desc"], ["n", "asc"], ["n", "desc"], ["v", "asc"], ["v", "desc"], "k", "n", "v"]
+        .map((s) => [m.table, facetSql(d, f, m, s)])),
   ].filter(([, sql]) => sql);
   let tot = 0;
   for (const [tbl, sql] of plan) {

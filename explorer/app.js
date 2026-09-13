@@ -1,15 +1,15 @@
 // PUDL generator explorer on facetful. One filter state (the URL query string) drives every panel;
 // each panel is one GROUP BY over the same WHERE. Two images in one worker — see sql.js for which
 // table serves which measure. No build step: plain ES modules, vendored facetful and maplibre.
-import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=441f6806";
+import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=9c4140d5";
 // the engine path carries its version, so the entry point is reached by dynamic import
 const { Facetful } = await import(indexUrl.href);
-import { createPlantMap } from "./map.js?v=441f6806";
+import { createPlantMap } from "./map.js?v=9c4140d5";
 import {
-  TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
+  TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, MEASURE_GROUPS, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
   yearsIn, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, gridCountSql, monthsPerYearSql,
   plantCardSql, plantTechSql, plantFercSql, plantNameSql,
-} from "./sql.js?v=441f6806";
+} from "./sql.js?v=9c4140d5";
 
 const DATA_DIR = "../data/";
 const OPFS_DIR = "pudl";
@@ -93,7 +93,7 @@ function writeState({ replace = false } = {}) {
   for (const [k, vals] of state.filters) for (const v of vals) p.append(k, v);
   if (state.measure !== "twh") p.set("m", state.measure);
   if (state.sort.join(":") !== "twh:desc") p.set("sort", state.sort.join(":"));
-  const fs = Object.entries(state.facetSort).filter(([, v]) => v && v !== "v").map((e) => e.join(":")).join(",");
+  const fs = Object.entries(state.facetSort).filter(([, v]) => v).map((e) => e.join(":")).join(",");
   if (fs) p.set("fs", fs);
   const url = "?" + p.toString();
   if (replace) history.replaceState(null, "", url); else history.pushState(null, "", url);
@@ -296,20 +296,44 @@ panels.push({
 function facetPanel(dim) {
   const list = el("div", { class: "list body" });
   const hdr = {};
-  const curSort = () => state.facetSort[dim.key] ?? (dim.orderBy === "dim" || dim.fixedOrder ? "k" : "v");
+  // Stored as the column letter plus a direction letter, so every header can go either way. A bare
+  // letter is an older URL and falls back to that column's natural direction.
+  const DIR = { k: "asc", n: "desc", v: "desc" };
+  const defaultCol = (m) => (dim.orderBy === "dim" || dim.fixedOrder ? "k" : m?.nonAdditive ? "n" : "v");
+  const curSort = (m) => {
+    const raw = state.facetSort[dim.key];
+    const col = raw?.[0] ?? defaultCol(m);
+    const dir = raw?.[1] ? (raw[1] === "a" ? "asc" : "desc") : DIR[col];
+    return [col, dir];
+  };
   const head = el("div", { class: "row head" },
-    ...[["k", "value", "k"], ["n", "plants", "n"], ["v", "", "v"]].map(([s, label, cls]) =>
-      (hdr[s] = el("button", { class: cls, title: "sort by this column", onclick: () => { state.facetSort[dim.key] = s; writeState({ replace: true }); } }, label))));
+    ...[["k", "value", "k"], ["n", "plants", "n"], ["v", "", "v"]].map(([s, label, cls]) => {
+      const txt = document.createTextNode(label), arrow = el("span", { class: "fa" });
+      const b = el("button", { class: cls, title: "sort by this column; click again to reverse",
+        onclick: () => {
+          const [col, dir] = curSort(MEASURES[state.measure]);
+          // same column flips, a new column starts in its natural direction
+          const next = col === s ? (dir === "desc" ? "a" : "d") : DIR[s] === "asc" ? "a" : "d";
+          state.facetSort[dim.key] = s + next;
+          writeState({ replace: true });
+        } }, txt, arrow);
+      hdr[s] = { b, txt, arrow };
+      return b;
+    }));
   const clear = el("a", { class: "clear", href: "#", onclick: (e) => { e.preventDefault(); clearKey(dim.key); } }, "clear");
   const node = el("section", { class: "panel facet" }, el("h3", {}, dim.title, clear, el("span", { class: "ms" })), head, list);
   return {
     name: dim.key, table: (m) => m.table, node, group: dim.group,
-    sql: (s, m) => facetSql(dim, s.filters, m, curSort()),
+    sql: (s, m) => facetSql(dim, s.filters, m, curSort(m)),
     render(rows, measure) {
       const sel = new Set(state.filters.get(dim.key) ?? []);
       clear.hidden = sel.size === 0;
-      hdr.v.textContent = measure.short;
-      for (const [s, b] of Object.entries(hdr)) b.classList.toggle("on", curSort() === s);
+      hdr.v.txt.nodeValue = measure.short;
+      const [sCol, sDir] = curSort(measure);
+      for (const [s, h] of Object.entries(hdr)) {
+        h.b.classList.toggle("on", sCol === s);
+        h.arrow.textContent = sCol === s ? (sDir === "asc" ? "▲" : "▼") : "";
+      }
       if (measure.ratio) rows = rows.filter((r) => r.v != null);
       if (dim.fixedOrder) { const ix = (k) => { const i = dim.fixedOrder.indexOf(k); return i < 0 ? 99 : i; }; rows.sort((a, b) => ix(a.k) - ix(b.k)); }
       const months = measure.perMonth ? monthsInRange() : 1;
@@ -377,13 +401,71 @@ function stackedBars(target, series, ks, { labelOf, onClick, brushKey, h = 220, 
   return { bw, pad };
 }
 
+/**
+ * One line per fuel, for a measure that cannot be added up.
+ *
+ * Stacking a ratio means nothing: coal's 1.1 t/MWh sitting on gas's 0.5 does not make 1.6 of
+ * anything, and the same goes for capacity factor. Non-additive measures get lines instead. The
+ * geometry matches stackedBars so the year brush keeps working unchanged.
+ */
+function lineChart(target, series, ks, { labelOf, brushKey, h = 220, w = 640, unit = "" }) {
+  const pad = { l: 46, r: 8, t: 8, b: 22 };
+  const iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
+  let maxT = 1e-9;
+  for (const k of ks) for (const v of series.get(k)?.parts.values() ?? []) if (v > maxT) maxT = v;
+  const bw = iw / Math.max(1, ks.length);
+  const y = (v) => pad.t + ih - (v / maxT) * ih;
+  const cx = (i) => pad.l + i * bw + bw / 2;
+  const sel = brushKey ? (state.filters.get(brushKey) ?? []) : [];
+  const range = sel.length === 1 && /\.\./.test(sel[0]) ? sel[0].split("..").map(Number) : null;
+  target.replaceChildren();
+  target.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  for (let i = 0; i <= 4; i++) {
+    const v = (maxT * i) / 4;
+    target.append(svg("line", { x1: pad.l, x2: w - pad.r, y1: y(v), y2: y(v), stroke: "#edf1f2" }));
+    const t = svg("text", { x: pad.l - 6, y: y(v) + 3, "text-anchor": "end", "font-size": 9, fill: "#6e8c91" });
+    t.textContent = compact(v, maxT < 10 ? 2 : 0); target.append(t);
+  }
+  for (const f of FUEL_ORDER) {
+    let d = "", open = false;
+    ks.forEach((k, i) => {
+      const v = series.get(k)?.parts.get(f);
+      if (v == null) { open = false; return; }       // a gap, not a drop to zero
+      d += `${open ? "L" : "M"}${cx(i).toFixed(1)},${y(v).toFixed(1)}`;
+      open = true;
+    });
+    if (!d) continue;
+    target.append(svg("path", { d, fill: "none", stroke: fuelColor(f), "stroke-width": 1.8, "stroke-linejoin": "round" }));
+    ks.forEach((k, i) => {
+      const v = series.get(k)?.parts.get(f);
+      if (v == null) return;
+      const c = svg("circle", { cx: cx(i), cy: y(v), r: 2.2, fill: fuelColor(f) });
+      const title = svg("title"); title.textContent = `${labelOf(k)} ${f}: ${compact(v, 2)} ${unit}`;
+      c.append(title); target.append(c);
+    });
+  }
+  // years outside the brush read as muted, matching the dimmed bars in the stacked view
+  if (range) ks.forEach((k, i) => {
+    if (k >= range[0] && k <= range[1]) return;
+    target.append(svg("rect", { x: pad.l + i * bw, y: pad.t, width: bw, height: ih, fill: "#ffffff", opacity: 0.62 }));
+  });
+  ks.forEach((k, i) => {
+    if (ks.length > 20 && i % 2) return;
+    const t = svg("text", { x: cx(i), y: h - 7, "text-anchor": "middle", "font-size": 9.5, fill: "#4c6267" });
+    t.textContent = labelOf(k); target.append(t);
+  });
+  return { bw, pad };
+}
+
 // ---- years (drag to brush a range; the wide table returns one row per fuel, so unpivot)
 const yearSvg = $("#year-chart svg");
 panels.push({
   name: "years", table: (m) => m.table, node: $("#year-chart"),
   sql: (s, m) => yearSql(s.filters, m),
   render(rows, measure) {
-    $("#year-chart .sub").textContent = `${measure.label} by year, stacked by fuel type. Drag to select a year range.`;
+    $("#year-chart .sub").textContent = measure.nonAdditive
+      ? `${measure.label} by year, one line per fuel type — a ratio cannot be stacked. Drag to select a year range.`
+      : `${measure.label} by year, stacked by fuel type. Drag to select a year range.`;
     const series = new Map();
     const add = (year, fuel, v) => {
       if (!v) return;
@@ -395,7 +477,8 @@ panels.push({
     if (measure.table === "pty") for (const r of rows) add(r.k, r.f, (r.v ?? 0) / (measure.perMonth ? (r.m || 12) : 1));
     else for (const r of rows) for (const y of YEARS) add(y, r.f, (r[`y${y}`] ?? 0) / (measure.perMonth ? (monthsPerYear[y] || 12) : 1));
     const ks = YEARS.filter((y) => series.has(y));
-    const { bw, pad } = stackedBars(yearSvg, series, ks, { labelOf: String, brushKey: "year", h: 230, unit: measure.unit });
+    const draw = measure.nonAdditive ? lineChart : stackedBars;
+    const { bw, pad } = draw(yearSvg, series, ks, { labelOf: String, brushKey: "year", h: 230, unit: measure.unit });
     let x0 = null, rect = null;
     const idx = (ev) => {
       const pt = yearSvg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
@@ -497,20 +580,26 @@ panels.push({
   sql: (s, m) => mapSql(s.filters, m),
   render(rows, measure) {
     const months = measure.perMonth ? monthsInRange() : 1;
-    const maxV = Math.max(1e-9, ...rows.map((r) => r.v ?? 0)) / months;
-    lastMapPoints = rows.filter((r) => r.lat != null && r.lon != null && r.v != null && r.v > 0).map((r) => {
+    // Circle area tracks something additive. Sizing by a ratio would draw a 2 MW solar site as large
+    // as a power station, so a non-additive measure sizes by its own basis and still reads its value.
+    const sizeOf = (r) => (measure.nonAdditive ? (r.s ?? 0) : (r.v ?? 0) / months);
+    const maxS = Math.max(1e-9, ...rows.map(sizeOf));
+    lastMapPoints = rows.filter((r) => r.lat != null && r.lon != null && r.v != null && sizeOf(r) > 0).map((r) => {
       const v = (r.v ?? 0) / months;
-      return { p: r.p, f: r.f, lat: r.lat, lon: r.lon, v, r: 1.5 + 9 * Math.sqrt(Math.max(0, v) / maxV), c: fuelColor(r.f) };
+      return { p: r.p, f: r.f, lat: r.lat, lon: r.lon, v, r: 1.5 + 9 * Math.sqrt(sizeOf(r) / maxS), c: fuelColor(r.f) };
     });
     plantMap?.update(lastMapPoints);
-    $("#map .sub").textContent = `${fmtInt.format(lastMapPoints.length)} plant × fuel points with ${measure.label.toLowerCase()} > 0, area ∝ value. Hover for a summary, click for details.`;
+    const basis = { cap: "capacity", co2: "CO₂", gen: "generation" }[measure.sizeBy ?? "gen"];
+    $("#map .sub").textContent = `${fmtInt.format(lastMapPoints.length)} plant × fuel points, `
+      + (measure.nonAdditive ? `area ∝ ${basis}, colour by fuel; ${measure.label.toLowerCase()} is in the tooltip` : `area ∝ ${measure.label.toLowerCase()}`)
+      + `. Hover for a summary, click for details.`;
   },
 });
 
 // ---- the grid: one row per generator, sparklines, windowed infinite scroll
 const ghead = $("#grid .ghead"), grows = $("#grid .grows"), gtall = $("#grid .tall"), scroller = $("#grid-scroller");
 const gview = $("#grid .gviewport");
-const BUILD = "441f6806";
+const BUILD = "9c4140d5";
 
 /**
  * A stale shell announces itself.
@@ -1029,7 +1118,26 @@ function syncControls() {
   $("#measure").value = state.measure;
   if ($("#q") !== document.activeElement) $("#q").value = state.filters.get(SEARCH_PARAM)?.[0] ?? "";
 }
-$("#measure").addEventListener("change", (e) => { state.measure = e.target.value; writeState({ replace: true }); });
+// The picker is generated, so adding a measure cannot leave the dropdown behind.
+(function buildMeasurePicker() {
+  const sel = $("#measure");
+  const groups = new Map();
+  for (const [k, m] of Object.entries(MEASURES)) {
+    const g = m.group ?? "";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(el("option", { value: k }, m.label));
+  }
+  for (const [g, opts] of groups) {
+    if (!g) sel.append(...opts);
+    else sel.append(el("optgroup", { label: MEASURE_GROUPS[g] ?? g }, ...opts));
+  }
+  sel.value = state.measure;
+})();
+$("#measure").addEventListener("change", (e) => {
+  if (!MEASURES[e.target.value]) { e.target.value = state.measure; return; }   // never leave it unset
+  state.measure = e.target.value;
+  writeState({ replace: true });
+});
 let qTimer = null;
 $("#q").addEventListener("input", (e) => {
   clearTimeout(qTimer);

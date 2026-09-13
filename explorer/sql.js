@@ -55,15 +55,26 @@ export const MEASURES = {
   twh: { label: "Generation (TWh)", short: "Gen TWh", table: "gw", prefix: "gen", scale: 1000000, unit: "TWh", digits: 1, monthly: { prefix: "gen", scale: 1000000 } },
   gw: { label: "Avg capacity (GW)", short: "Cap GW", table: "gw", prefix: "cap", scale: 1000, unit: "GW", digits: 1, perMonth: true },
   co2: { label: "CO₂ (Mt)", short: "CO₂ Mt", table: "gw", prefix: "co2", scale: 1000000, unit: "Mt", digits: 2, group: "cems", monthly: { prefix: "co2", scale: 1000000 } },
-  co2_mwh: { label: "CO₂ intensity (t/MWh)", short: "t/MWh", table: "gw", ratio: ["co2", "gen"], scale: 1, unit: "t/MWh", digits: 3, group: "cems" },
+  cf: { label: "Capacity factor (%)", short: "CF %", table: "gw", ratio: ["gen", "cap"], scale: 100 / 730.5, unit: "%", digits: 0,
+        nonAdditive: true, sizeBy: "cap" },
+  co2_mwh: { label: "CO₂ intensity (t/MWh)", short: "t/MWh", table: "gw", ratio: ["co2", "gen"], gate: "has_cems = 1", scale: 1, unit: "t/MWh", digits: 3, group: "cems",
+        nonAdditive: true, sizeBy: "co2" },
   // cap_* is capacity-MW-months, so co2/cap is t per MW-month; x12 gives the t/MW-yr the label
   // promises. This read 1/12, which is 144x low: coal came out at 32 t/MW-yr against the ~4,700
   // implied by its own intensity and capacity factor (explorer/scalecheck.mjs checks this).
-  co2_mw: { label: "CO₂ per MW (t/MW·yr)", short: "t/MW·yr", table: "gw", ratio: ["co2", "cap"], scale: 12, unit: "t/MW·yr", digits: 0, group: "cems" },
+  co2_mw: { label: "CO₂ per MW (t/MW·yr)", short: "t/MW·yr", table: "gw", ratio: ["co2", "cap"], gate: "has_cems = 1", scale: 12, unit: "t/MW·yr", digits: 0, group: "cems",
+        nonAdditive: true, sizeBy: "co2" },
   cost: { label: "Fuel cost ($bn)", short: "Fuel $bn", table: "pty", expr: "round(sum(total_fuel_cost)/1000000000.0, 3)", unit: "$bn", digits: 2, monthly: { prefix: "cost", scale: 1000000000 } },
   tbtu: { label: "Fuel burned (TBtu)", short: "Fuel TBtu", table: "pty", expr: "round(sum(total_mmbtu)/1000000.0, 3)", unit: "TBtu", digits: 1, monthly: { prefix: "mmbtu", scale: 1000000 } },
   capex: { label: "Plant in service ($bn, FERC 1)", short: "Capex $bn", table: "pty", expr: "round(sum(ferc_capex_total)/1000000000.0, 3)", unit: "$bn", digits: 1, group: "ferc" },
-  opex_mwh: { label: "Operating cost ($/MWh, FERC 1)", short: "Opex $/MWh", table: "pty", expr: "round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 2)", unit: "$/MWh", digits: 1, group: "ferc" },
+  opex_mwh: { label: "Operating cost ($/MWh, FERC 1)", short: "Opex $/MWh", table: "pty", expr: "round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 2)", unit: "$/MWh", digits: 1, group: "ferc",
+        nonAdditive: true, sizeBy: "gen" },
+};
+
+/** Optgroup headings for the measure picker; a measure with no `group` sits above them all. */
+export const MEASURE_GROUPS = {
+  cems: "Emissions (EPA CEMS, fossil units > 25 MW)",
+  ferc: "Costs (FERC Form 1, regulated utilities)",
 };
 
 export function ident(name) { return `"${String(name).replace(/"/g, '""')}"`; }
@@ -95,10 +106,10 @@ export function measureExpr(measure, years, { grouped = true } = {}) {
   const total = (p) => (grouped ? `sum(${span(p, years)})` : `(${span(p, years)})`);
   if (measure.ratio) {
     const [num, den] = measure.ratio;
-    // denominator counts only rows that carry the numerator, so intensity is not diluted by non-CEMS plant
-    const gated = grouped
-      ? `sum(case when has_cems = 1 then (${span(den, years)}) else 0 end)`
-      : `(case when has_cems = 1 then (${span(den, years)}) else 0 end)`;
+    // `gate` keeps the denominator to rows that can carry the numerator, so an emissions intensity is
+    // not diluted by plant with no monitor. Capacity factor has no gate: it applies to every row.
+    const inner = measure.gate ? `case when ${measure.gate} then (${span(den, years)}) else 0 end` : span(den, years);
+    const gated = grouped ? `sum(${inner})` : `(${inner})`;
     const scale = measure.scale === 1 ? "" : ` * ${measure.scale}`;
     return `round(${total(num)} / nullif(${gated}, 0)${scale}, 4)`;
   }
@@ -153,7 +164,9 @@ const COUNTS = { gw: "count(distinct plant_id_eia) as n, count(distinct gen_key)
 export function facetSql(dim, filters, measure, sort) {
   const table = measure.table;
   const d = ident(dim.col);
-  const order = sort === "k" ? `${d}` : sort === "n" ? "n desc" : "v desc";
+  const [col, dir] = Array.isArray(sort) ? sort : [sort, null];
+  const way = dir === "asc" ? "asc" : "desc";
+  const order = col === "k" ? `${d} ${dir === "desc" ? "desc" : "asc"}` : col === "n" ? `n ${way}` : `v ${way}`;
   const years = yearsIn(filters);
   return (
     `select ${d} as k, ${COUNTS[table]}, ${measureExpr(measure, years)} as v from t ` +
@@ -210,11 +223,24 @@ export function seasonSql(filters, measure) {
   return `select fuel_type_code_pudl as f, ${cols} from t ${whereClause(filters, { table: "pty" })} group by fuel_type_code_pudl order by fuel_type_code_pudl`;
 }
 
+/**
+ * How big a thing is, for a measure that does not say. Circle area tracks this rather than the
+ * measure, because a ratio would draw a 2 MW solar site the size of a power station.
+ */
+function sizeExpr(measure, years) {
+  if (!measure.nonAdditive) return null;
+  if (measure.table === "pty") return "round(sum(net_generation_mwh)/1000000.0, 4)";
+  const p = measure.sizeBy ?? "gen";
+  return `round(sum(${span(p, years)})/1000000.0, 4)`;
+}
+
 export function mapSql(filters, measure) {
   const table = measure.table;
   const years = yearsIn(filters);
+  const size = sizeExpr(measure, years);
   return (
-    `select plant_id_eia as p, fuel_type_code_pudl as f, min(latitude) as lat, min(longitude) as lon, ${measureExpr(measure, years)} as v ` +
+    `select plant_id_eia as p, fuel_type_code_pudl as f, min(latitude) as lat, min(longitude) as lon, ${measureExpr(measure, years)} as v` +
+    `${size ? `, ${size} as s` : ""} ` +
     `from t ${whereClause(filters, { table, extra: "latitude is not null" })} group by plant_id_eia, fuel_type_code_pudl order by v desc`
   );
 }
@@ -261,6 +287,9 @@ export function plantNameSql(plantId) {
  * measure in GW or $bn is meaningless for one generator) the row carries its own expression.
  */
 export const MEASURE_SPARK = {
+  // capacity factor is not a default column any more: it appears when it is the selected measure.
+  // The CF number stays in the grid either way, so this entry adds only the sparkline.
+  cf:      { series: "cf", label: "Capacity factor yearly", scalar: null },
   gw:      { series: "cap_mw", label: "Capacity yearly", raw: "mon",
              scalar: { col: "avg_mw", label: "Avg MW", digits: 1 },
              sql: (y) => `round((${span("cap", y)})/nullif((${span("mon", y)}), 0), 4) as avg_mw` },
@@ -281,8 +310,9 @@ export const MEASURE_SPARK = {
 /** The grid's columns for one measure. The measure pair is present only when the measure has one. */
 export function gridCols(measureKey) {
   const m = MEASURE_SPARK[measureKey];
+  // `scalar: null` means the base columns already carry that number, so only the sparkline is added
   const pair = m
-    ? [{ col: m.scalar.col, label: m.scalar.label, numeric: true, digits: m.scalar.digits, w: "4.2rem", cems: m.cems },
+    ? [...(m.scalar ? [{ col: m.scalar.col, label: m.scalar.label, numeric: true, digits: m.scalar.digits, w: "4.2rem", cems: m.cems }] : []),
        { col: `spark_${m.series}`, label: m.label, series: m.series, cemsSeries: m.cems, w: "8.4rem", noSort: true }]
     : [];
   return [
@@ -295,7 +325,6 @@ export function gridCols(measureKey) {
     { col: "twh", label: "TWh", numeric: true, digits: 2, w: "3.8rem" },
     { col: "spark_gen", label: "Generation yearly", series: "gen", w: "8.4rem", noSort: true },
     { col: "cf", label: "CF", numeric: true, pct: true, w: "3rem" },
-    { col: "spark_cf", label: "Capacity factor yearly", series: "cf", w: "8.4rem", noSort: true },
     ...pair,
     { col: "first_operating_year", label: "Online", numeric: true, digits: 0, plain: true, w: "4rem" },
     { col: "gem_wiki_url", label: "GEM", external: true, w: "3.4rem" },
@@ -320,7 +349,8 @@ export function gridSql(filters, sort, { limit = 100, offset = 0, measure = "twh
   const raw = ["gen", "cap", ...(m?.raw ? [m.raw] : [])];
   const series = raw.flatMap((p) => YEARS.map((y) => `${p}_${y}`)).join(", ");
   // the measure's own expression where it reads for one generator, the row's own where it does not
-  const extra = m ? ", " + (m.sql ? m.sql(years) : `${measureExpr(MEASURES[measure], years, { grouped: false })} as ${m.scalar.col}`) : "";
+  const extra = !m || !m.scalar ? ""
+    : ", " + (m.sql ? m.sql(years) : `${measureExpr(MEASURES[measure], years, { grouped: false })} as ${m.scalar.col}`);
   const [col, dir] = sort;
   const key = gridSortable(measure).has(col) ? col : "twh";
   return (

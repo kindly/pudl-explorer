@@ -38,19 +38,21 @@ const probe = `(() => {
   return { heads, sparks, cols: cells.length, tracks, drawn };
 })()`;
 
-const expect = { twh: null, gw: "Capacity yearly", co2: "CO₂ yearly", co2_mwh: "CO₂ intensity yearly",
-  co2_mw: "CO₂ per MW yearly", cost: "Fuel cost yearly", tbtu: "Fuel burned yearly", capex: null, opex_mwh: null };
+// Generation is the only fixed sparkline; the second follows the measure, or is absent.
+const expect = { twh: null, gw: "Capacity yearly", cf: "Capacity factor yearly", co2: "CO₂ yearly",
+  co2_mwh: "CO₂ intensity yearly", co2_mw: "CO₂ per MW yearly", cost: "Fuel cost yearly",
+  tbtu: "Fuel burned yearly", capex: null, opex_mwh: null };
 let fail = 0;
 for (const [mk, want] of Object.entries(expect)) {
   await ev(`(() => { const s = document.getElementById('measure'); s.value = ${JSON.stringify(mk)};
     s.dispatchEvent(new Event('change')); return true; })()`);
   await sleep(2200);
   const p = await ev(probe);
-  const third = p.sparks[2] ?? null;
-  const ok = third === want && p.cols === p.tracks && p.sparks.length === (want ? 3 : 2)
-    && p.sparks[0] === "Generation yearly" && p.sparks[1] === "Capacity factor yearly";
+  const second = p.sparks[1] ?? null;
+  const ok = second === want && p.cols === p.tracks && p.sparks.length === (want ? 2 : 1)
+    && p.sparks[0] === "Generation yearly";
   if (!ok) fail++;
-  console.log(`${ok ? "  ok " : "FAIL "} ${mk.padEnd(9)} sparklines=${p.sparks.length} third=${third ?? "(none)"} cols=${p.cols} tracks=${p.tracks} drawn-in-row-1=${p.drawn}`);
+  console.log(`${ok ? "  ok " : "FAIL "} ${mk.padEnd(9)} sparklines=${p.sparks.length} second=${second ?? "(none)"} cols=${p.cols} tracks=${p.tracks} drawn-in-row-1=${p.drawn}`);
 }
 // sorting by a column that only one measure has must survive switching away
 await ev(`(() => { const s=document.getElementById('measure'); s.value='tbtu'; s.dispatchEvent(new Event('change')); return true; })()`);
@@ -62,10 +64,10 @@ await ev(`(() => { const s=document.getElementById('measure'); s.value='twh'; s.
 await sleep(2200);
 const after = await ev(probe);
 const rows = await ev(`document.querySelectorAll('#grid .grow:not([hidden])').length`);
-const okSort = after.sparks.length === 2 && rows > 5;
+const okSort = after.sparks.length === 1 && rows > 5;
 if (!okSort) fail++;
-console.log(`${okSort ? "  ok " : "FAIL "} sorted by ${sortedBy} then switched to generation: ${after.sparks.length} sparklines, ${rows} rows`);
+console.log(`${okSort ? "  ok " : "FAIL "} sorted by ${sortedBy} then switched to generation: ${after.sparks.length} sparkline(s), ${rows} rows`);
 if (errs.length) { console.log("\nconsole errors:"); errs.slice(0, 5).forEach((e) => console.log("  " + e.split("\n")[0])); fail += errs.length; }
-console.log(fail ? `\n${fail} FAILURES` : "\nthe third sparkline follows the measure and vanishes when there is none");
+console.log(fail ? `\n${fail} FAILURES` : "\nthe measure sparkline follows the measure and vanishes when there is none");
 chrome.kill(); server.kill(); try { rmSync(profile, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);
