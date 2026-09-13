@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import "./stamp.mjs";   // assets carry a content hash; never serve an unstamped tree
 
 const url = process.argv[2] ?? "http://127.0.0.1:8767/explorer/";
 const outDir = process.argv[3] ?? ".";

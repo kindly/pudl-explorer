@@ -2,12 +2,12 @@
 // each panel is one GROUP BY over the same WHERE. Two images in one worker — see sql.js for which
 // table serves which measure. No build step: plain ES modules, vendored facetful and maplibre.
 import { Facetful } from "./vendor/facetful/index.js";
-import { createPlantMap } from "./map.js?v=20260913a";
+import { createPlantMap } from "./map.js?v=7a406af4";
 import {
   TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
   yearsIn, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, gridCountSql, monthsPerYearSql,
   plantCardSql, plantTechSql, plantFercSql, plantNameSql,
-} from "./sql.js?v=20260913a";
+} from "./sql.js?v=7a406af4";
 
 const DATA_DIR = "../data/";
 const OPFS_DIR = "pudl";
@@ -508,7 +508,28 @@ panels.push({
 // ---- the grid: one row per generator, sparklines, windowed infinite scroll
 const ghead = $("#grid .ghead"), grows = $("#grid .grows"), gtall = $("#grid .tall"), scroller = $("#grid-scroller");
 const gview = $("#grid .gviewport");
-const BUILD = "20260913a";
+const BUILD = "7a406af4";
+
+/**
+ * A stale shell announces itself.
+ *
+ * index.html cannot carry a cache-busting query of its own, and the static host sends no
+ * Cache-Control, so a browser is free to keep an old copy of the page and go on loading the asset
+ * URLs that copy names. version.json is fetched uncached and compared with the stamp compiled into
+ * this file: if they differ, the HTML in front of you is older than this script.
+ */
+(async function checkBuild() {
+  try {
+    const r = await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" });
+    const { build } = await r.json();
+    if (!build || build === BUILD) return;
+    console.warn(`page is build ${BUILD}, the server has ${build}`);
+    document.body.prepend(el("div", { class: "stale-shell" },
+      `This page is an old copy (${BUILD}); the server has ${build}. `,
+      el("a", { href: "#", onclick: (e) => { e.preventDefault(); location.reload(); } }, "Reload"),
+      " to update it."));
+  } catch {}
+})();
 let HEAD_H = 26;   // measured after the first paint; the scroll height allows for it
 // `dom` caches the built <tr>s per page so re-entering a page costs nothing; `want` is the page a
 // drag is heading for, so a scrollbar drag issues one query at the end rather than one per event.

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import "./stamp.mjs";   // assets carry a content hash; never serve an unstamped tree
 const port = 9345, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const server = spawn("python3", ["-m", "http.server", "8779", "--bind", "127.0.0.1"], { cwd: new URL("..", import.meta.url).pathname, stdio: "ignore" });
 await sleep(700);
