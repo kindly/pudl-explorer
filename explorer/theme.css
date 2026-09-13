@@ -117,19 +117,22 @@ body:not(.show-ms) .ms { display: none; }
 .row .k { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); }
 .row .k .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
 .row .n { color: var(--text-faint); font-size: 0.75rem; text-align: right; }
-.row.head button.n { letter-spacing: 0; }
+.row.head button.n, .row.head .fixed.n { letter-spacing: 0; }
 .row .v { color: var(--text); text-align: right; }
 .row:hover { box-shadow: inset 0 0 0 1px #bbb; }
 .row.selected { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-tint); font-weight: 600; }
 .row.blank .k { color: var(--text-faint); font-style: italic; }
 .row.head { cursor: default; margin: 0 0 0.2rem; padding-bottom: 0.2rem; border-bottom: 1px solid var(--border-soft); border-radius: 0; }
 .row.head:hover { box-shadow: none; }
-.row.head button { border: 0; background: none; padding: 0; font: inherit; font-size: 0.72rem; color: var(--text-faint); cursor: pointer; text-transform: uppercase; letter-spacing: 0.03em; }
-.row.head button.n, .row.head button.v { text-align: right; }
+.row.head button, .row.head .fixed { border: 0; background: none; padding: 0; font: inherit; font-size: 0.72rem; color: var(--text-faint); cursor: pointer; text-transform: uppercase; letter-spacing: 0.03em; }
+/* a scale cannot be reordered, so its headers must not look or behave like buttons */
+.row.head .fixed { cursor: default; opacity: 0.75; }
+.row.head button.n, .row.head button.v, .row.head .fixed.n, .row.head .fixed.v { text-align: right; }
 .row.head button.on { color: var(--accent-dark); font-weight: 700; }
 /* the arrow is rendered, not a pseudo-element: every header can now point either way */
 .row.head button .fa { font-size: 0.6rem; margin-left: 0.15rem; }
 .row.head button:hover { color: var(--text-strong); }
+.row.head .fixed:hover { color: var(--text-faint); }
 .facet .list .row { margin: 0; }
 
 /* ---- charts / map row --------------------------------------------------- */

@@ -28,10 +28,12 @@ export const DIMS = [
   { key: "state", col: "state", title: "State" },
   { key: "ba", col: "ba_code", title: "Balancing authority" },
   { key: "utility", col: "utility_name_eia", title: "Utility (top 300)", topN: 300 },
-  { key: "cap", col: "capacity_bucket", title: "Site capacity", fixedOrder: ["< 1 MW", "1-10 MW", "10-100 MW", "100-500 MW", "500+ MW"] },
+  // `rangeOrder` marks a scale: the buckets only mean anything in order, so sorting is switched off
+  // rather than offered and ignored.
+  { key: "cap", col: "capacity_bucket", title: "Site capacity", rangeOrder: true, fixedOrder: ["< 1 MW", "1-10 MW", "10-100 MW", "100-500 MW", "500+ MW"] },
   { key: "decade", col: "operating_decade", title: "First commissioned (decade)", orderBy: "dim", numeric: true },
   // measure-specific: shown only while a measure of the same group is selected
-  { key: "co2b", col: "co2_intensity_bucket", title: "CO₂ intensity (t/MWh, CEMS)", fixedOrder: ["< 0.2", "0.2-0.4", "0.4-0.6", "0.6-0.9", "0.9+"], group: "cems" },
+  { key: "co2b", col: "co2_intensity_bucket", title: "CO₂ intensity (t/MWh, CEMS)", rangeOrder: true, fixedOrder: ["< 0.2", "0.2-0.4", "0.4-0.6", "0.6-0.9", "0.9+"], group: "cems" },
   { key: "cems", col: "cems_allocation", title: "CEMS coverage", fixedOrder: ["measured", "capacity-split", "plant-fallback", "mixed"], group: "cems" },
   { key: "ferc", col: "ferc_allocation", title: "FERC 1 costs", fixedOrder: ["plant_type match", "largest technology"], group: "ferc" },
 ];

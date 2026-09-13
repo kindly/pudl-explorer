@@ -1,15 +1,15 @@
 // PUDL generator explorer on facetful. One filter state (the URL query string) drives every panel;
 // each panel is one GROUP BY over the same WHERE. Two images in one worker — see sql.js for which
 // table serves which measure. No build step: plain ES modules, vendored facetful and maplibre.
-import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=fdb5fa0f";
+import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=6f04a7d2";
 // the engine path carries its version, so the entry point is reached by dynamic import
 const { Facetful } = await import(indexUrl.href);
-import { createPlantMap } from "./map.js?v=fdb5fa0f";
+import { createPlantMap } from "./map.js?v=6f04a7d2";
 import {
   TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, MEASURE_GROUPS, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
   yearsIn, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, gridCountSql, monthsPerYearSql,
   plantCardSql, plantTechSql, plantFercSql, plantNameSql,
-} from "./sql.js?v=fdb5fa0f";
+} from "./sql.js?v=6f04a7d2";
 
 const DATA_DIR = "../data/";
 const OPFS_DIR = "pudl";
@@ -306,19 +306,26 @@ function facetPanel(dim) {
     const dir = raw?.[1] ? (raw[1] === "a" ? "asc" : "desc") : DIR[col];
     return [col, dir];
   };
+  // A scale reads in one order only, so its headers are plain text: offering an arrow that does
+  // nothing is worse than offering nothing. A fixed order that is merely a sensible default (CEMS
+  // coverage, FERC allocation) stays sortable, and holds that default until something is clicked.
+  const locked = !!dim.rangeOrder;
+  const chosen = () => state.facetSort[dim.key];
   const head = el("div", { class: "row head" },
     ...[["k", "value", "k"], ["n", "plants", "n"], ["v", "", "v"]].map(([s, label, cls]) => {
       const txt = document.createTextNode(label), arrow = el("span", { class: "fa" });
-      const b = el("button", { class: cls, title: "sort by this column; click again to reverse",
-        onclick: () => {
-          const [col, dir] = curSort(MEASURES[state.measure]);
-          // same column flips, a new column starts in its natural direction
-          const next = col === s ? (dir === "desc" ? "a" : "d") : DIR[s] === "asc" ? "a" : "d";
-          state.facetSort[dim.key] = s + next;
-          writeState({ replace: true });
-        } }, txt, arrow);
-      hdr[s] = { b, txt, arrow };
-      return b;
+      const node = locked
+        ? el("span", { class: cls + " fixed", title: `${dim.title} is shown in range order` }, txt, arrow)
+        : el("button", { class: cls, title: "sort by this column; click again to reverse",
+            onclick: () => {
+              const [col, dir] = curSort(MEASURES[state.measure]);
+              // same column flips, a new column starts in its natural direction
+              const next = col === s ? (dir === "desc" ? "a" : "d") : DIR[s] === "asc" ? "a" : "d";
+              state.facetSort[dim.key] = s + next;
+              writeState({ replace: true });
+            } }, txt, arrow);
+      hdr[s] = { b: node, txt, arrow };
+      return node;
     }));
   const clear = el("a", { class: "clear", href: "#", onclick: (e) => { e.preventDefault(); clearKey(dim.key); } }, "clear");
   const node = el("section", { class: "panel facet" }, el("h3", {}, dim.title, clear, el("span", { class: "ms" })), head, list);
@@ -329,13 +336,19 @@ function facetPanel(dim) {
       const sel = new Set(state.filters.get(dim.key) ?? []);
       clear.hidden = sel.size === 0;
       hdr.v.txt.nodeValue = measure.short;
-      const [sCol, sDir] = curSort(measure);
+      // nothing is marked sorted while the fixed order is what you are actually looking at
+      const holding = locked || (dim.fixedOrder && !chosen());
+      const [sCol, sDir] = holding ? [null, null] : curSort(measure);
       for (const [s, h] of Object.entries(hdr)) {
         h.b.classList.toggle("on", sCol === s);
         h.arrow.textContent = sCol === s ? (sDir === "asc" ? "▲" : "▼") : "";
       }
       if (measure.ratio) rows = rows.filter((r) => r.v != null);
-      if (dim.fixedOrder) { const ix = (k) => { const i = dim.fixedOrder.indexOf(k); return i < 0 ? 99 : i; }; rows.sort((a, b) => ix(a.k) - ix(b.k)); }
+      // the client-side fixed order must not silently overrule a column the reader clicked
+      if (holding && dim.fixedOrder) {
+        const ix = (k) => { const i = dim.fixedOrder.indexOf(k); return i < 0 ? 99 : i; };
+        rows.sort((a, b) => ix(a.k) - ix(b.k));
+      }
       const months = measure.perMonth ? monthsInRange() : 1;
       const maxV = Math.max(1e-9, ...rows.map((r) => (r.v ?? 0) / months));
       list.replaceChildren(...rows.map((r) => {
@@ -599,7 +612,7 @@ panels.push({
 // ---- the grid: one row per generator, sparklines, windowed infinite scroll
 const ghead = $("#grid .ghead"), grows = $("#grid .grows"), gtall = $("#grid .tall"), scroller = $("#grid-scroller");
 const gview = $("#grid .gviewport");
-const BUILD = "fdb5fa0f";
+const BUILD = "6f04a7d2";
 
 /**
  * A stale shell announces itself.
