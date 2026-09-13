@@ -189,12 +189,13 @@ body:not(.show-ms) .ms { display: none; }
 /* `display: grid` below outranks the UA's `[hidden] { display: none }`, so say it explicitly:
    an unused pool slot must be blank, not the last row it happened to hold. */
 .grid .grow[hidden] { display: none; }
+.grid { --row-h: 25px; --head-h: 26px; }
 .grid .grow, .grid .ghead {
   display: grid; grid-template-columns: var(--grid-cols); align-items: center;
-  height: 25px; box-sizing: border-box; font-size: 0.8rem;
+  height: var(--row-h); box-sizing: border-box; font-size: 0.8rem;
 }
 .grid .ghead {
-  position: relative; z-index: 1; height: 26px; background: var(--surface);
+  position: relative; z-index: 1; height: var(--head-h); background: var(--surface);
   border-bottom: 1px solid var(--border); font-size: 0.75rem; font-weight: 600; color: var(--text-muted);
 }
 .grid .ghead > span { padding: 0 0.5rem; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -205,6 +206,13 @@ body:not(.show-ms) .ms { display: none; }
 .grid .grow { border-bottom: 1px solid var(--border-soft); background: var(--surface); }
 /* frozen columns: opaque, so the scrolling columns pass behind them */
 .grid .grow > span.freeze, .grid .ghead > span.freeze { position: sticky; z-index: 2; background: var(--surface); }
+/* The background has to cover the whole row height. `align-items: center` above shrink-wraps every
+   cell to its own text -- 18px inside a 25px row -- so the scrolling columns showed through the
+   bands above and below, and a cell with no value collapsed to zero height and hid nothing at all.
+   Stretch the frozen cells and centre their text with line-height; display:flex would centre it too
+   but would stop text-overflow: ellipsis working on the long plant names. */
+.grid .grow > span.freeze { align-self: stretch; line-height: calc(var(--row-h) - 1px); }
+.grid .ghead > span.freeze { align-self: stretch; line-height: calc(var(--head-h) - 1px); }
 .grid .ghead > span.freeze { z-index: 3; }
 .grid .grow:hover > span.freeze { background: #eaf3f5; }
 .grid .grow > span.freeze-last, .grid .ghead > span.freeze-last { box-shadow: 1px 0 0 var(--border); }
