@@ -16,7 +16,10 @@ let fails = 0, n = 0, slow = [];
 for (const [mk, m] of Object.entries(MEASURES)) for (const [sl, f] of states) {
   const plan = [
     [m.table, totalsSql(f, m)], [m.table, yearSql(f, m)], ["pty", seasonSql(f, m)], [m.table, mapSql(f, m)],
-    ["gw", gridCountSql(f)], ["gw", gridSql(f, ["twh", "desc"])], ["gw", gridSql(f, ["plant_name_eia", "asc"], { offset: 2000 })],
+    ["gw", gridCountSql(f)], ["gw", gridSql(f, ["twh", "desc"], { measure: mk })],
+    ["gw", gridSql(f, ["plant_name_eia", "asc"], { offset: 2000, measure: mk })],
+    // the sort key can belong to a column the measure no longer shows; it must degrade, not break
+    ["gw", gridSql(f, ["co2_mt", "desc"], { measure: mk })], ["gw", gridSql(f, ["tbtu", "asc"], { measure: mk })],
     ["gw", plantCardSql(3, f)], ["gw", plantTechSql(3, f)], ["pty", plantFercSql(3, f)], ["gw", plantNameSql(3)],
     ...DIMS.filter((d) => !d.group || d.group === m.group).flatMap((d) => ["k", "n", "v"].map((s) => [m.table, facetSql(d, f, m, s)])),
   ].filter(([, sql]) => sql);

@@ -65,7 +65,7 @@ if (ready) {
   console.log("facets:", await evalJs(`[...document.querySelectorAll('.facet')].map(f => f.querySelector('h3').firstChild.textContent + ':' + f.querySelectorAll('.row').length).join(', ')`));
   console.log("fuel rows:", await evalJs(`[...document.querySelectorAll('.facet .row')].slice(0,10).map(r => r.textContent.trim().replace(/\\s+/g,' ')).join(' ; ')`));
   for (let i = 0; i < 60; i++) { await sleep(500); if (await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length > 0`)) break; }
-  console.log("grid rows:", await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length`), "first:", await evalJs(`document.querySelector('#grid tbody tr')?.textContent.trim().replace(/\\s+/g,' ').slice(0,200)`));
+  console.log("grid rows:", await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length`), "first:", await evalJs(`document.querySelector('#grid .grow:not([hidden])')?.innerText.replace(/\\s+/g,' ').slice(0,200)`));
   console.log("map points:", await evalJs(`document.querySelector('#map .sub').textContent`), "| maplibre canvas:", await evalJs(`!!document.querySelector('#map canvas.maplibregl-canvas')`));
   console.log("season sub:", await evalJs(`document.querySelector('#month-chart .sub').textContent`), "| bars:", await evalJs(`document.querySelectorAll('#month-chart svg rect').length`));
   // the grid: sparklines present, and the windowed scroller pulls more pages

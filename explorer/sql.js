@@ -56,7 +56,10 @@ export const MEASURES = {
   gw: { label: "Avg capacity (GW)", short: "Cap GW", table: "gw", prefix: "cap", scale: 1000, unit: "GW", digits: 1, perMonth: true },
   co2: { label: "CO₂ (Mt)", short: "CO₂ Mt", table: "gw", prefix: "co2", scale: 1000000, unit: "Mt", digits: 2, group: "cems", monthly: { prefix: "co2", scale: 1000000 } },
   co2_mwh: { label: "CO₂ intensity (t/MWh)", short: "t/MWh", table: "gw", ratio: ["co2", "gen"], scale: 1, unit: "t/MWh", digits: 3, group: "cems" },
-  co2_mw: { label: "CO₂ per MW (t/MW·yr)", short: "t/MW·yr", table: "gw", ratio: ["co2", "cap"], scale: 1 / 12, unit: "t/MW·yr", digits: 0, group: "cems" },
+  // cap_* is capacity-MW-months, so co2/cap is t per MW-month; x12 gives the t/MW-yr the label
+  // promises. This read 1/12, which is 144x low: coal came out at 32 t/MW-yr against the ~4,700
+  // implied by its own intensity and capacity factor (explorer/scalecheck.mjs checks this).
+  co2_mw: { label: "CO₂ per MW (t/MW·yr)", short: "t/MW·yr", table: "gw", ratio: ["co2", "cap"], scale: 12, unit: "t/MW·yr", digits: 0, group: "cems" },
   cost: { label: "Fuel cost ($bn)", short: "Fuel $bn", table: "pty", expr: "round(sum(total_fuel_cost)/1000000000.0, 3)", unit: "$bn", digits: 2, monthly: { prefix: "cost", scale: 1000000000 } },
   tbtu: { label: "Fuel burned (TBtu)", short: "Fuel TBtu", table: "pty", expr: "round(sum(total_mmbtu)/1000000.0, 3)", unit: "TBtu", digits: 1, monthly: { prefix: "mmbtu", scale: 1000000 } },
   capex: { label: "Plant in service ($bn, FERC 1)", short: "Capex $bn", table: "pty", expr: "round(sum(ferc_capex_total)/1000000000.0, 3)", unit: "$bn", digits: 1, group: "ferc" },
@@ -245,38 +248,84 @@ export function plantNameSql(plantId) {
 
 // ---- the detail grid -------------------------------------------------------
 // `series` columns carry the sparkline data back with the row, so there is no second query.
-export const GRID_COLS = [
-  { col: "plant_name_eia", label: "Plant", link: true, w: "11.5rem", freeze: true },
-  { col: "generator_id", label: "Gen", w: "3.2rem", freeze: true },
-  { col: "utility_name_eia", label: "Utility", w: "8rem" },
-  { col: "technology_description", label: "Technology", w: "8rem" },
-  { col: "operational_status", label: "Status", w: "4.8rem", pill: true },
-  { col: "capacity_mw", label: "MW", numeric: true, digits: 1, w: "4rem" },
-  { col: "twh", label: "TWh", numeric: true, digits: 2, w: "3.8rem" },
-  { col: "spark_gen", label: "Generation yearly", series: "gen", w: "8.4rem", noSort: true },
-  { col: "cf", label: "CF", numeric: true, pct: true, w: "3rem" },
-  { col: "spark_cf", label: "Capacity factor yearly", series: "cf", w: "8.4rem", noSort: true },
-  { col: "co2_mt", label: "Mt", numeric: true, digits: 2, w: "3.6rem", cems: true },
-  { col: "spark_co2", label: "CO₂ yearly", series: "co2", w: "8.4rem", noSort: true },
-  { col: "first_operating_year", label: "Online", numeric: true, digits: 0, plain: true, w: "4rem" },
-  { col: "gem_wiki_url", label: "GEM", external: true, w: "3.4rem" },
-];
-const SORTABLE = new Set(GRID_COLS.filter((c) => !c.series).map((c) => c.col));
 
-export function gridSql(filters, sort, { limit = 100, offset = 0 } = {}) {
+/**
+ * The third sparkline, which follows the selected measure. Generation and capacity factor are always
+ * columns one and two, so `twh` is absent here; the two FERC measures are absent because their
+ * filings are plant-level annual figures with no per-generator yearly series. A measure that is not
+ * in this map simply has no third column — there is no fallback.
+ *
+ * `raw` names the extra yearly series the query must fetch on top of gen and cap. `scalar` is the
+ * number beside the sparkline: where the measure's own expression means something for a single
+ * generator it is reused verbatim, so the row agrees with the facet panels; where it does not (a
+ * measure in GW or $bn is meaningless for one generator) the row carries its own expression.
+ */
+export const MEASURE_SPARK = {
+  gw:      { series: "cap_mw", label: "Capacity yearly", raw: "mon",
+             scalar: { col: "avg_mw", label: "Avg MW", digits: 1 },
+             sql: (y) => `round((${span("cap", y)})/nullif((${span("mon", y)}), 0), 4) as avg_mw` },
+  co2:     { series: "co2", label: "CO₂ yearly", raw: "co2", cems: true,
+             scalar: { col: "co2_mt", label: "Mt", digits: 2 } },
+  co2_mwh: { series: "co2_mwh", label: "CO₂ intensity yearly", raw: "co2", cems: true,
+             scalar: { col: "co2_mwh", label: "t/MWh", digits: 3 } },
+  co2_mw:  { series: "co2_mw", label: "CO₂ per MW yearly", raw: "co2", cems: true,
+             scalar: { col: "co2_mw", label: "t/MW·yr", digits: 1 } },
+  cost:    { series: "cost", label: "Fuel cost yearly", raw: "cost",
+             scalar: { col: "fuel_cost_m", label: "$m", digits: 1 },
+             sql: (y) => `round((${span("cost", y)})/1000000.0, 3) as fuel_cost_m` },
+  tbtu:    { series: "mmbtu", label: "Fuel burned yearly", raw: "mmbtu",
+             scalar: { col: "tbtu", label: "TBtu", digits: 2 },
+             sql: (y) => `round((${span("mmbtu", y)})/1000000.0, 4) as tbtu` },
+};
+
+/** The grid's columns for one measure. The measure pair is present only when the measure has one. */
+export function gridCols(measureKey) {
+  const m = MEASURE_SPARK[measureKey];
+  const pair = m
+    ? [{ col: m.scalar.col, label: m.scalar.label, numeric: true, digits: m.scalar.digits, w: "4.2rem", cems: m.cems },
+       { col: `spark_${m.series}`, label: m.label, series: m.series, cemsSeries: m.cems, w: "8.4rem", noSort: true }]
+    : [];
+  return [
+    { col: "plant_name_eia", label: "Plant", link: true, w: "11.5rem", freeze: true },
+    { col: "generator_id", label: "Gen", w: "3.2rem", freeze: true },
+    { col: "utility_name_eia", label: "Utility", w: "8rem" },
+    { col: "technology_description", label: "Technology", w: "8rem" },
+    { col: "operational_status", label: "Status", w: "4.8rem", pill: true },
+    { col: "capacity_mw", label: "MW", numeric: true, digits: 1, w: "4rem" },
+    { col: "twh", label: "TWh", numeric: true, digits: 2, w: "3.8rem" },
+    { col: "spark_gen", label: "Generation yearly", series: "gen", w: "8.4rem", noSort: true },
+    { col: "cf", label: "CF", numeric: true, pct: true, w: "3rem" },
+    { col: "spark_cf", label: "Capacity factor yearly", series: "cf", w: "8.4rem", noSort: true },
+    ...pair,
+    { col: "first_operating_year", label: "Online", numeric: true, digits: 0, plain: true, w: "4rem" },
+    { col: "gem_wiki_url", label: "GEM", external: true, w: "3.4rem" },
+  ];
+}
+
+/** The sort keys a measure's column set offers; anything else falls back to generation. */
+export function gridSortable(measureKey) {
+  return new Set(gridCols(measureKey).filter((c) => !c.series).map((c) => c.col));
+}
+
+export function gridSql(filters, sort, { limit = 100, offset = 0, measure = "twh" } = {}) {
   const years = yearsIn(filters);
-  const gen = span("gen", years), cap = span("cap", years), co2 = span("co2", years);
+  const gen = span("gen", years), cap = span("cap", years);
+  const m = MEASURE_SPARK[measure];
   const cols = [
     "plant_id_eia", "gen_key", "plant_name_eia", "state", "generator_id", "utility_name_eia",
     "technology_description", "operational_status", "capacity_mw", "first_operating_year",
     "retirement_year", "gem_wiki_url", "has_cems",
   ].map(ident).join(", ");
-  const series = [...YEARS.map((y) => `gen_${y}`), ...YEARS.map((y) => `cap_${y}`), ...YEARS.map((y) => `co2_${y}`)].join(", ");
+  // gen and cap are always needed: they draw the first two sparklines between them.
+  const raw = ["gen", "cap", ...(m?.raw ? [m.raw] : [])];
+  const series = raw.flatMap((p) => YEARS.map((y) => `${p}_${y}`)).join(", ");
+  // the measure's own expression where it reads for one generator, the row's own where it does not
+  const extra = m ? ", " + (m.sql ? m.sql(years) : `${measureExpr(MEASURES[measure], years, { grouped: false })} as ${m.scalar.col}`) : "";
   const [col, dir] = sort;
-  const key = SORTABLE.has(col) ? col : "twh";
+  const key = gridSortable(measure).has(col) ? col : "twh";
   return (
-    `select ${cols}, round((${gen})/1000000.0, 4) as twh, round((${co2})/1000000.0, 4) as co2_mt, ` +
-    `round((${gen})/nullif((${cap})*730.5, 0), 4) as cf, ${series} ` +
+    `select ${cols}, round((${gen})/1000000.0, 4) as twh, ` +
+    `round((${gen})/nullif((${cap})*730.5, 0), 4) as cf${extra}, ${series} ` +
     `from t ${whereClause(filters, { table: "gw" })} ` +
     `order by ${ident(key)} ${dir === "asc" ? "asc" : "desc"} limit ${limit} offset ${offset}`
   );

@@ -4,7 +4,7 @@
 import { Facetful } from "./vendor/facetful/index.js";
 import { createPlantMap } from "./map.js?v=20260913a";
 import {
-  TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, SEARCH_PARAM, NULL_TOKEN, GRID_COLS,
+  TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
   yearsIn, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, gridCountSql, monthsPerYearSql,
   plantCardSql, plantTechSql, plantFercSql, plantNameSql,
 } from "./sql.js?v=20260913a";
@@ -80,7 +80,7 @@ function readState() {
   return {
     filters,
     measure: MEASURES[p.get("m")] ? p.get("m") : "twh",
-    sort: [GRID_COLS.some((c) => c.col === sc) ? sc : "twh", sd === "asc" ? "asc" : "desc"],
+    sort: [sc || "twh", sd === "asc" ? "asc" : "desc"],
     facetSort: Object.fromEntries((p.get("fs") ?? "").split(",").filter(Boolean).map((s) => s.split(":"))),
   };
 }
@@ -230,6 +230,10 @@ let runId = 0;
 async function refresh(only = null) {
   const id = ++runId;
   const t0 = performance.now();
+  // the measure decides the third sparkline, so the columns may have to change before anything is
+  // queried; this covers a control change, a back/forward, and the first load alike
+  fixSort();
+  if (colsFor !== state.measure) buildColumns();
   renderChips();
   const nf = [...state.filters.values()].reduce((a, v) => a + v.length, 0);
   for (const b of document.querySelectorAll(".clear-all")) {
@@ -513,28 +517,50 @@ const grid = { pages: new Map(), dom: new Map(), inflight: new Set(), lo: 0, hi:
   // grid; once it does, scrolling never queries again.
   read: null, allTimer: 0 };
 
-$("#grid").style.setProperty("--grid-cols", GRID_COLS.map((c) => c.w ?? "1fr").join(" "));
-// Plant and Gen stay put when the grid is scrolled sideways: each frozen column is stuck at the
-// running width of the ones before it.
-const FREEZE_LEFT = (() => {
+/**
+ * Generation and capacity factor are always the first two sparklines. The third follows the selected
+ * measure and is simply absent when that measure has nothing per-generator to draw — no stand-in.
+ * Changing the measure therefore changes the column set, so the header, the frozen-column offsets,
+ * the track widths and the row pool are all rebuilt together.
+ */
+let GCOLS = gridCols(state.measure);
+let FREEZE_LEFT = [];
+let colsFor = null;      // the measure GCOLS was built for
+const freezeClass = (i) => (GCOLS[i].freeze ? " freeze" + (FREEZE_LEFT[i + 1] ? "" : " freeze-last") : "");
+
+function buildColumns() {
+  colsFor = state.measure;
+  GCOLS = gridCols(state.measure);
+  $("#grid").style.setProperty("--grid-cols", GCOLS.map((c) => c.w ?? "1fr").join(" "));
+  // Plant and Gen stay put when the grid is scrolled sideways: each frozen column is stuck at the
+  // running width of the ones before it.
   let left = 0;
-  return GRID_COLS.map((c) => {
+  FREEZE_LEFT = GCOLS.map((c) => {
     if (!c.freeze) return null;
     const at = left;
     left += parseFloat(c.w) || 0;
     return `${at}rem`;
   });
-})();
-const freezeClass = (i) => (GRID_COLS[i].freeze ? " freeze" + (FREEZE_LEFT[i + 1] ? "" : " freeze-last") : "");
-ghead.replaceChildren(...GRID_COLS.map((c, i) => el("span", {
-  class: (c.numeric ? "numeric " : "") + (c.series ? "seriescol" : "") + freezeClass(i),
-  style: FREEZE_LEFT[i] ? `left:${FREEZE_LEFT[i]}` : "",
-  title: c.series ? `${c.label}, ${YEARS[0]}–${YEARS.at(-1)}; bars outside the selected years are dimmed` : `sort by ${c.label}`,
-  onclick: c.noSort ? null : () => {
-    const dir = state.sort[0] === c.col ? (state.sort[1] === "desc" ? "asc" : "desc") : c.numeric ? "desc" : "asc";
-    state.sort = [c.col, dir]; writeState({ replace: true });
-  },
-}, c.label, c.noSort ? null : el("span", { class: "arrow" }))));
+  ghead.replaceChildren(...GCOLS.map((c, i) => el("span", {
+    class: (c.numeric ? "numeric " : "") + (c.series ? "seriescol" : "") + freezeClass(i),
+    style: FREEZE_LEFT[i] ? `left:${FREEZE_LEFT[i]}` : "",
+    title: c.series ? `${c.label}, ${YEARS[0]}–${YEARS.at(-1)}; bars outside the selected years are dimmed` : `sort by ${c.label}`,
+    onclick: c.noSort ? null : () => {
+      const dir = state.sort[0] === c.col ? (state.sort[1] === "desc" ? "asc" : "desc") : c.numeric ? "desc" : "asc";
+      state.sort = [c.col, dir]; writeState({ replace: true });
+    },
+  }, c.label, c.noSort ? null : el("span", { class: "arrow" }))));
+  measureAt = MEASURE_AT[MEASURE_SPARK[state.measure]?.series] ?? null;
+  // the pool's cells are built per column, so it cannot survive a column change
+  pool.length = 0;
+  grows.replaceChildren();
+  rendered = { first: 0, last: -1 };
+}
+
+/** The sort column can vanish with the measure; fall back to generation when it does. */
+function fixSort() {
+  if (!gridSortable(state.measure).has(state.sort[0])) state.sort = ["twh", "desc"];
+}
 
 /** Bars for one 17-year series as a single path; years outside the filter are dimmed. */
 function sparkline(values, colour, { max = null, w = 62, h = 16 } = {}) {
@@ -561,14 +587,15 @@ function sparkline(values, colour, { max = null, w = 62, h = 16 } = {}) {
 const pool = [];
 
 function buildSlot() {
-  const cells = GRID_COLS.map((c, i) => {
+  const cells = GCOLS.map((c, i) => {
     const cell = el("span", { class: (c.numeric ? "numeric" : "") + freezeClass(i), style: FREEZE_LEFT[i] ? `left:${FREEZE_LEFT[i]}` : "" });
     const parts = {};
     if (c.link) { parts.a = el("a", { href: "#" }); parts.small = el("small"); cell.append(parts.a, parts.small); }
     else if (c.external) { parts.a = el("a", { target: "_blank", rel: "noopener", class: "ext" }, "wiki ↗"); cell.append(parts.a); }
     else if (c.pill) { parts.pill = el("span", { class: "pill" }); cell.append(parts.pill); }
     else if (c.series) {
-      parts.na = el("span", { class: "na" }, "no CEMS");
+      // only a CO₂ series is empty *because* there is no monitor; say so there and nowhere else
+      parts.na = el("span", { class: "na" }, c.cemsSeries ? "no CEMS" : "no data");
       parts.svg = svg("svg", { class: "spark", viewBox: "0 0 110 16", width: 110, height: 16 });
       parts.dim = svg("path", { opacity: 0.22 });
       parts.on = svg("path", {});
@@ -596,8 +623,22 @@ function sparkPaths(values, peak, sel, w = 110, h = 16) {
 }
 
 // scratch arrays reused for every row, so filling a row allocates nothing
-const gen = new Array(YEARS.length), cap = new Array(YEARS.length), co2 = new Array(YEARS.length), cf = new Array(YEARS.length);
-const SERIES = { gen, cf, co2 };
+const gen = new Array(YEARS.length), cap = new Array(YEARS.length), cf = new Array(YEARS.length),
+      msr = new Array(YEARS.length);
+
+/**
+ * Per-year value for the third sparkline. Bars are normalised to the row's own peak, so these only
+ * have to get the shape right; the number beside the sparkline carries the units.
+ */
+const MEASURE_AT = {
+  cap_mw:  (r, y) => { const m = r[`mon_${y}`] ?? 0; return m > 0 ? (r[`cap_${y}`] ?? 0) / m : 0; },
+  co2:     (r, y) => r[`co2_${y}`] ?? 0,
+  co2_mwh: (r, y) => { const g = r[`gen_${y}`] ?? 0; return g > 0 ? (r[`co2_${y}`] ?? 0) / g : 0; },
+  co2_mw:  (r, y) => { const c = r[`cap_${y}`] ?? 0; return c > 0 ? (r[`co2_${y}`] ?? 0) / c : 0; },
+  cost:    (r, y) => r[`cost_${y}`] ?? 0,
+  mmbtu:   (r, y) => r[`mmbtu_${y}`] ?? 0,
+};
+let measureAt = null;   // set by buildColumns(); null when the measure has no third sparkline
 
 function fillSlot(slot, r, sel) {
   slot.row.hidden = false;
@@ -605,20 +646,21 @@ function fillSlot(slot, r, sel) {
   const colour = fuelColor(guessFuel(r));
   for (let i = 0; i < YEARS.length; i++) {
     const y = YEARS[i];
-    gen[i] = r[`gen_${y}`] ?? 0; cap[i] = r[`cap_${y}`] ?? 0; co2[i] = r[`co2_${y}`] ?? 0;
+    gen[i] = r[`gen_${y}`] ?? 0; cap[i] = r[`cap_${y}`] ?? 0;
     cf[i] = cap[i] > 0 ? gen[i] / (cap[i] * 730.5) : 0;
+    if (measureAt) msr[i] = measureAt(r, y);
   }
   if (r.plant_name_eia) plantNames.set(r.plant_id_eia, `${r.plant_name_eia}, ${r.state}`);
   if (r.gem_wiki_url) plantWiki.set(r.plant_id_eia, r.gem_wiki_url);
-  for (let ci = 0; ci < GRID_COLS.length; ci++) {
-    const c = GRID_COLS[ci], { parts } = slot.cells[ci];
+  for (let ci = 0; ci < GCOLS.length; ci++) {
+    const c = GCOLS[ci], { parts } = slot.cells[ci];
     const v = r[c.col];
     if (c.link) { parts.a.textContent = v ?? ""; parts.small.textContent = r.state ? " " + r.state : ""; continue; }
     if (c.external) { if (v) { parts.a.href = String(v); parts.a.hidden = false; } else parts.a.hidden = true; continue; }
     if (c.pill) { parts.pill.textContent = v ?? ""; parts.pill.className = `pill ${String(v ?? "").replace(/\W/g, "")}`; continue; }
     if (c.series) {
-      const series = SERIES[c.series];
-      const none = (c.series === "co2" && !r.has_cems) || !series.some((x) => x > 0);
+      const series = c.series === "gen" ? gen : c.series === "cf" ? cf : msr;
+      const none = (c.cemsSeries && !r.has_cems) || !series.some((x) => x > 0);
       parts.na.hidden = !none; parts.svg.style.display = none ? "none" : "";
       if (!none) {
         let peak = c.series === "cf" ? 1 : 0;
@@ -647,12 +689,12 @@ function blankSlot(slot) {
   if (slot.row.hidden) return;                 // already blank; do not touch the DOM again
   slot.row.hidden = true;
   slot.plant = null;
-  for (let ci = 0; ci < GRID_COLS.length; ci++) {
+  for (let ci = 0; ci < GCOLS.length; ci++) {
     const { parts } = slot.cells[ci];
     if (parts.text) parts.text.nodeValue = "";
     if (parts.small) parts.small.textContent = "";
     if (parts.pill) { parts.pill.textContent = ""; parts.pill.className = "pill"; }
-    if (parts.a) { parts.a.hidden = true; if (GRID_COLS[ci].link) parts.a.textContent = ""; }
+    if (parts.a) { parts.a.hidden = true; if (GCOLS[ci].link) parts.a.textContent = ""; }
     if (parts.svg) parts.svg.style.display = "none";
     if (parts.na) parts.na.hidden = true;
   }
@@ -683,6 +725,10 @@ function guessFuel(r) {
 
 let rendered = { first: 0, last: -1 };   // absolute row indices currently shown by the pool
 
+// first build, now that the pool and the rendered range exist for buildColumns() to reset
+fixSort();
+buildColumns();
+
 function rowData(i) {
   if (grid.read) return grid.read(i);
   const p = Math.floor(i / PAGE), k = i - p * PAGE;
@@ -695,7 +741,7 @@ async function loadAll() {
   if (!grid.total || grid.read) return;
   try {
     const t0 = performance.now();
-    const r = await db.query(gridSql(state.filters, state.sort, { limit: grid.total }), { table: "gw" });
+    const r = await db.query(gridSql(state.filters, state.sort, { limit: grid.total, measure: state.measure }), { table: "gw" });
     if (token !== grid.token) return;
     grid.read = makeReader(r);
     window.__gridAll = true;
@@ -707,7 +753,7 @@ async function loadAll() {
 
 function headArrows() {
   for (const [k, span] of [...ghead.children].entries()) {
-    const c = GRID_COLS[k];
+    const c = GCOLS[k];
     const arrow = span.querySelector(".arrow");      // sparkline columns have no sort arrow
     if (!arrow) continue;
     span.classList.toggle("sorted", state.sort[0] === c.col);
@@ -807,7 +853,7 @@ function paint() {
   rendered = { first, last };
   window.__rendered = rendered;
   if (dbg) showDebug();
-  setText("#grid .count", `${fmtInt.format(grid.total)} generators · rows ${fmtInt.format(first + 1)}–${fmtInt.format(last + 1)} by ${GRID_COLS.find((c) => c.col === state.sort[0])?.label ?? "generation"} ${state.sort[1]}`);
+  setText("#grid .count", `${fmtInt.format(grid.total)} generators · rows ${fmtInt.format(first + 1)}–${fmtInt.format(last + 1)} by ${GCOLS.find((c) => c.col === state.sort[0])?.label ?? "generation"} ${state.sort[1]}`);
 }
 
 async function loadPage(p) {
@@ -816,7 +862,7 @@ async function loadPage(p) {
   const token = grid.token, seq = grid.seq;   // a filter change or a scroll jump invalidates this fetch
   grid.inflight.add(p);
   try {
-    const { rows, ms } = await q(gridSql(state.filters, state.sort, { limit: PAGE, offset: p * PAGE }), "gw");
+    const { rows, ms } = await q(gridSql(state.filters, state.sort, { limit: PAGE, offset: p * PAGE, measure: state.measure }), "gw");
     if (token !== grid.token || seq !== grid.seq) return;
     grid.pages.set(p, rows);
     grid.lo = Math.min(grid.lo, p); grid.hi = Math.max(grid.hi, p);
