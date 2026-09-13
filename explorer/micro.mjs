@@ -1,0 +1,19 @@
+// Isolate the cost of multi-column arithmetic on the wide table.
+import { readFileSync } from "node:fs";
+const eng = await (await import("./vendor/facetful/core.js")).instantiate(readFileSync("./vendor/facetful/facetful_wasm.wasm"));
+const h = eng.openTable(readFileSync("../data/generator_tech_wide.facetful")).handle;
+const Y = [...Array(17).keys()].map((i) => 2010 + i);
+const sumN = (n) => `sum(${Y.slice(0, n).map((y) => `coalesce(gen_${y},0)`).join(" + ")})`;
+const t = (sql) => { let b = 1e9; for (let k = 0; k < 9; k++) { const s = performance.now(); eng.query(h, sql); b = Math.min(b, performance.now() - s); } return b; };
+const show = (label, sql) => console.log(String(label).padEnd(46), t(sql).toFixed(2).padStart(7), "ms");
+console.log("--- ungrouped scan of 42,257 rows ---");
+show("count(*)", "select count(*) as n from t");
+for (const n of [1, 2, 4, 8, 17]) show(`sum of ${n} column${n > 1 ? "s" : ""}`, `select ${sumN(n)} as v from t`);
+show("sum of 17 columns, no coalesce", `select sum(${Y.map((y) => `gen_${y}`).join(" + ")}) as v from t`);
+show("17 separate sums", `select ${Y.map((y) => `sum(gen_${y})`).join(", ")} from t`);
+console.log("\n--- grouped by fuel (10 groups) ---");
+show("count(*) only", "select fuel_type_code_pudl as k, count(*) as n from t group by fuel_type_code_pudl");
+show("count(*) + sum of 1 column", `select fuel_type_code_pudl as k, count(*) as n, ${sumN(1)} as v from t group by fuel_type_code_pudl`);
+show("count(*) + sum of 17 columns", `select fuel_type_code_pudl as k, count(*) as n, ${sumN(17)} as v from t group by fuel_type_code_pudl`);
+show("count(distinct text) + sum of 17", `select fuel_type_code_pudl as k, count(distinct gen_uid) as n, ${sumN(17)} as v from t group by fuel_type_code_pudl`);
+show("count(distinct int) + sum of 17", `select fuel_type_code_pudl as k, count(distinct plant_id_eia) as n, ${sumN(17)} as v from t group by fuel_type_code_pudl`);

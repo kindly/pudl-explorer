@@ -115,6 +115,7 @@ body:not(.show-ms) .ms { display: none; }
 .row .k { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); }
 .row .k .swatch { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
 .row .n { color: var(--text-faint); font-size: 0.75rem; text-align: right; }
+.row.head button.n { letter-spacing: 0; }
 .row .v { color: var(--text); text-align: right; }
 .row:hover { box-shadow: inset 0 0 0 1px #bbb; }
 .row.selected { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-tint); font-weight: 600; }
@@ -165,20 +166,62 @@ body:not(.show-ms) .ms { display: none; }
 .map .maplibregl-popup-close-button { font-size: 1.1rem; padding: 0 0.4rem; }
 @media (max-width: 70rem) { .map .mapbox { min-height: 22rem; } }
 
-/* ---- table ------------------------------------------------------------ */
-.grid .scroller { max-height: 30rem; overflow: auto; border-top: 1px solid var(--border-soft); }
-table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
-thead th {
-  position: sticky; top: 0; background: var(--surface); text-align: left; font-weight: 600; color: var(--text-muted);
-  padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer; user-select: none; font-size: 0.75rem;
+/* ---- the grid ---------------------------------------------------------- */
+/*
+ * Rows never scroll. `.tall` owns the scroll height, `.gviewport` is sticky inside it so the row
+ * area is pinned to the scrollport, and scrolling only rewrites the contents of a fixed pool of
+ * rows. Because the rows cannot move out of view, a late main thread shows stale rows rather than
+ * the blank gap a spacer-based virtual list leaves behind. Rows snap to whole rows, deliberately.
+ */
+/* Fixed height, never written to from JS: the grid must not resize as you scroll. The surface
+   colour covers the sub-row strip under the last pool row, which stays genuinely empty. */
+.grid .scroller { height: 32rem; overflow: auto; border-top: 1px solid var(--border-soft);
+  background: var(--surface); }
+/* as wide as the columns need, so the outer scroller provides horizontal scrolling */
+.grid .tall { position: relative; width: max-content; min-width: 100%; }
+/* No overflow here: any overflow (even on one axis) would make this a scroll container, and the
+   frozen columns would then stick to it instead of to the scroller. The pool is sized to fit
+   exactly, so there is nothing to clip. */
+.grid .gviewport { position: sticky; top: 0; background: var(--surface); }
+/* Fallback when sticky is not honoured (WebKit during a momentum flick): the same block, held in
+   place by a transform that app.js writes in the scroll handler. */
+.grid .scroller.nosticky .gviewport { position: absolute; top: 0; left: 0; will-change: transform; }
+/* `display: grid` below outranks the UA's `[hidden] { display: none }`, so say it explicitly:
+   an unused pool slot must be blank, not the last row it happened to hold. */
+.grid .grow[hidden] { display: none; }
+.grid .grow, .grid .ghead {
+  display: grid; grid-template-columns: var(--grid-cols); align-items: center;
+  height: 25px; box-sizing: border-box; font-size: 0.8rem;
 }
-thead th.numeric { text-align: right; }
-thead th.sorted { color: var(--accent-dark); }
-thead th .arrow { font-size: 0.65rem; margin-left: 0.2rem; }
-tbody td { padding: 0.28rem 0.5rem; border-bottom: 1px solid var(--border-soft); white-space: nowrap; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
-tbody td.numeric { text-align: right; }
-tbody tr:hover { background: var(--accent-tint); }
-.empty { padding: 1rem; border-left: 3px solid var(--pop); color: var(--text-muted); }
+.grid .ghead {
+  position: relative; z-index: 1; height: 26px; background: var(--surface);
+  border-bottom: 1px solid var(--border); font-size: 0.75rem; font-weight: 600; color: var(--text-muted);
+}
+.grid .ghead > span { padding: 0 0.5rem; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid .ghead > span.seriescol { cursor: default; color: var(--text-faint); font-weight: 500; font-size: 0.68rem; letter-spacing: -0.01em; }
+.grid .ghead > span.numeric { text-align: right; }
+.grid .ghead > span.sorted { color: var(--accent-dark); }
+.grid .ghead .arrow { font-size: 0.65rem; margin-left: 0.2rem; }
+.grid .grow { border-bottom: 1px solid var(--border-soft); background: var(--surface); }
+/* frozen columns: opaque, so the scrolling columns pass behind them */
+.grid .grow > span.freeze, .grid .ghead > span.freeze { position: sticky; z-index: 2; background: var(--surface); }
+.grid .ghead > span.freeze { z-index: 3; }
+.grid .grow:hover > span.freeze { background: #eaf3f5; }
+.grid .grow > span.freeze-last, .grid .ghead > span.freeze-last { box-shadow: 1px 0 0 var(--border); }
+.grid .grow:hover { background: var(--accent-tint); }
+.grid .grow > span { padding: 0 0.35rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grid .grow > span.numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.grid .grow a { color: var(--accent); text-decoration: none; }
+.grid .grow a:hover { text-decoration: underline; }
+.grid .grow small { color: var(--text-faint); }
+
+.grid .spark { vertical-align: middle; shape-rendering: crispEdges; }
+.grid .na { color: #b9c6ca; font-size: 0.68rem; }
+.grid .pill { font-size: 0.68rem; padding: 0.05rem 0.4rem; border-radius: 999px; background: var(--border-soft); color: var(--text-muted); }
+.grid .pill.retired { background: #f6e2e6; color: var(--danger); }
+.grid .pill.proposed { background: #eaf3f5; color: var(--accent-dark); }
+.grid .ext { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 0.72rem; }
+.grid .empty { padding: 1rem; border-left: 3px solid var(--pop); color: var(--text-muted); }
 
 /* ---- footer / loading -------------------------------------------------- */
 footer { display: flex; gap: 1.25rem; align-items: center; margin-top: 1rem; font-size: 0.75rem; color: var(--text-faint); flex-wrap: wrap; }
@@ -193,3 +236,15 @@ footer label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: p
 #loading .steps { font-size: 0.8rem; color: var(--text-muted); white-space: pre-line; text-align: center; max-width: 34rem; }
 #loading progress { width: 20rem; accent-color: var(--accent); }
 #loading .err { color: var(--danger); font-size: 0.8rem; white-space: pre-wrap; max-width: 40rem; }
+
+.stale-shell {
+  background: var(--pop); color: #fff; font-size: 0.8rem; font-weight: 600;
+  padding: 0.4rem 1.5rem; margin: 0 -1.5rem; text-align: center;
+}
+
+/* ?griddebug=1 — a readout of the numbers the row count depends on, for devices with no debugger */
+#griddebug {
+  position: fixed; right: 0.4rem; bottom: 0.4rem; z-index: 9999; max-width: 92vw;
+  padding: 0.4rem 0.5rem; border-radius: 0.4rem; background: rgba(17, 24, 28, 0.88); color: #d7e5e9;
+  font: 500 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; pointer-events: none;
+}

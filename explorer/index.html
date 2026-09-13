@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
-<link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="theme.css?v=20260913a">
 </head>
 <body>
 
@@ -28,6 +28,7 @@
   </div>
   <div class="totals" id="totals">
     <div class="total"><span class="fig" id="t-plants">–</span><span class="lbl">plants</span></div>
+    <div class="total"><span class="fig" id="t-gens">–</span><span class="lbl">generators</span></div>
     <div class="total"><span class="fig" id="t-twh">–</span><span class="lbl">TWh generated</span></div>
     <div class="total"><span class="fig" id="t-gw">–</span><span class="lbl">avg GW capacity</span></div>
     <div class="total"><span class="fig" id="t-cf">–</span><span class="lbl">capacity factor</span></div>
@@ -43,7 +44,6 @@
       <option value="gw">Avg capacity (GW)</option>
       <option value="cost">Fuel cost ($bn)</option>
       <option value="tbtu">Fuel burned (TBtu)</option>
-      <option value="plants">Plants</option>
       <optgroup label="Emissions (EPA CEMS, fossil units > 25 MW)">
         <option value="co2">CO₂ (Mt)</option>
         <option value="co2_mwh">CO₂ intensity (t/MWh)</option>
@@ -84,12 +84,14 @@
 </section>
 
 <section class="panel grid" id="grid">
-  <h3>Generators by year <span class="count" style="font-weight:500;color:var(--text-faint);font-size:0.75rem"></span><span class="ms"></span></h3>
-  <div class="scroller">
-    <table>
-      <thead><tr></tr></thead>
-      <tbody></tbody>
-    </table>
+  <h3>Generators <span class="count" style="font-weight:500;color:var(--text-faint);font-size:0.75rem"></span><span class="ms"></span></h3>
+  <div class="scroller" id="grid-scroller">
+    <div class="tall">
+      <div class="gviewport">
+        <div class="ghead"></div>
+        <div class="grows"></div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -98,9 +100,9 @@
   <span id="open-info"></span>
   <label><input type="checkbox" id="show-ms"> show timings</label>
   <button id="reset">reset stored data</button>
-  <span>Data: <a href="https://catalyst.coop/pudl/" target="_blank" rel="noopener">PUDL</a> <code>out_eia__monthly_generators</code> 2010 onward, aggregated to plant × technology × year and generator × year; emissions from EPA CEMS via PUDL's crosswalk; costs from FERC Form 1 via <code>plant_id_pudl</code> · engine: facetful</span>
+  <span>Data: <a href="https://catalyst.coop/pudl/" target="_blank" rel="noopener">PUDL</a> <code>out_eia__monthly_generators</code> 2010 onward, aggregated to plant × technology × year and to generator × technology with the yearly series as columns; emissions from EPA CEMS via PUDL's crosswalk; costs from FERC Form 1 via <code>plant_id_pudl</code> · engine: facetful</span>
 </footer>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20260913a"></script>
 </body>
 </html>

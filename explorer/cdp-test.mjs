@@ -61,12 +61,75 @@ if (ready) {
   console.log("open-info:", await evalJs(`document.getElementById('open-info').textContent`));
   console.log("settle:", await evalJs(`document.getElementById('settle').textContent`));
   console.log("totals:", await evalJs(`[...document.querySelectorAll('#totals .total')].map(t => t.textContent.trim().replace(/\\s+/g,' ')).join(' | ')`));
+  console.log("facet head:", await evalJs(`document.querySelector('.facet .row.head')?.innerText.replace(/\\s+/g,' ')`), "| tooltip:", await evalJs(`document.querySelector('.facet .list .row')?.title`));
   console.log("facets:", await evalJs(`[...document.querySelectorAll('.facet')].map(f => f.querySelector('h3').firstChild.textContent + ':' + f.querySelectorAll('.row').length).join(', ')`));
   console.log("fuel rows:", await evalJs(`[...document.querySelectorAll('.facet .row')].slice(0,10).map(r => r.textContent.trim().replace(/\\s+/g,' ')).join(' ; ')`));
-  for (let i = 0; i < 60; i++) { await sleep(500); if (await evalJs(`document.querySelectorAll('#grid tbody tr').length > 0`)) break; }
-  console.log("grid rows:", await evalJs(`document.querySelectorAll('#grid tbody tr').length`), "first:", await evalJs(`document.querySelector('#grid tbody tr')?.textContent.trim().replace(/\\s+/g,' ').slice(0,200)`));
+  for (let i = 0; i < 60; i++) { await sleep(500); if (await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length > 0`)) break; }
+  console.log("grid rows:", await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length`), "first:", await evalJs(`document.querySelector('#grid tbody tr')?.textContent.trim().replace(/\\s+/g,' ').slice(0,200)`));
   console.log("map points:", await evalJs(`document.querySelector('#map .sub').textContent`), "| maplibre canvas:", await evalJs(`!!document.querySelector('#map canvas.maplibregl-canvas')`));
   console.log("season sub:", await evalJs(`document.querySelector('#month-chart .sub').textContent`), "| bars:", await evalJs(`document.querySelectorAll('#month-chart svg rect').length`));
+  // the grid: sparklines present, and the windowed scroller pulls more pages
+  console.log("grid count:", await evalJs(`document.querySelector('#grid .count').textContent`));
+  console.log("sparklines in row 1:", await evalJs(`document.querySelector('#grid .grow:not([hidden])')?.querySelectorAll('svg.spark').length`),
+    "| bars:", await evalJs(`[...document.querySelectorAll('#grid .grow:not([hidden])')[0].querySelectorAll('svg.spark path')].length`),
+    "| first row:", await evalJs(`document.querySelector('#grid .grow:not([hidden])')?.innerText.replace(/\\s+/g,' ').slice(0,110)`));
+  {
+    const before = await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length`);
+    for (let i = 0; i < 6; i++) {
+      await evalJs(`(() => { const s = document.getElementById('grid-scroller'); s.scrollTop = s.scrollHeight; return s.scrollTop; })()`);
+      await sleep(900);
+    }
+    console.log("after scrolling:", before, "→", await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length`), "rows |",
+      await evalJs(`document.querySelector('#grid .count').textContent`));
+    await evalJs(`document.getElementById('grid-scroller').scrollTop = 0; true`);
+    await sleep(1200);
+  }
+  {  // a fossil plant so the CO2 sparkline is populated, and a year brush so dimming shows
+    await evalJs(`location.search = '?fuel=coal&year=2014..2022'; true`);
+    for (let i = 0; i < 100; i++) { await sleep(300); if (await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length > 0`)) break; }
+    await sleep(1200);
+    console.log("coal row:", await evalJs(`document.querySelector('#grid .grow:not([hidden])')?.innerText.replace(/\\s+/g,' ').slice(0,120)`),
+      "| sparks:", await evalJs(`document.querySelector('#grid .grow:not([hidden])')?.querySelectorAll('svg.spark').length`),
+      "| dimmed paths:", await evalJs(`document.querySelectorAll('#grid svg.spark path[opacity]').length`));
+    await evalJs(`document.getElementById('grid').scrollIntoView({block:'start'}); true`);
+    await sleep(600);
+    const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    writeFileSync(join(outDir, "shot-grid.png"), Buffer.from(r.data, "base64")); console.log("screenshot shot-grid.png");
+    await evalJs(`document.getElementById('clear-all').click(); true`);
+    await sleep(1500);
+  }
+  {  // the grid area, at a scroll position partway down
+    await evalJs(`document.getElementById('grid').scrollIntoView({block:'start'}); true`);
+    await sleep(400);
+    await evalJs(`document.getElementById('grid-scroller').scrollTop = 25 * 4000; true`);
+    await sleep(700);
+    const clip = await evalJs(`(() => { const g = document.getElementById('grid').getBoundingClientRect(); return { x: Math.round(g.x), y: Math.round(g.y), width: Math.round(g.width), height: Math.min(420, Math.round(g.height)), scale: 1 }; })()`);
+    const r = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, clip });
+    writeFileSync(join(outDir, "shot-grid-scrolled.png"), Buffer.from(r.data, "base64"));
+    console.log("screenshot shot-grid-scrolled.png ·", await evalJs(`document.querySelector('#grid .count').textContent`));
+    // horizontal scrolling, and whether Plant and Gen stay put while it happens
+    const hs = await evalJs(`(() => {
+      const s = document.getElementById('grid-scroller');
+      const before = document.querySelector('#grid .grow > span.freeze').getBoundingClientRect().left;
+      s.scrollLeft = 9999;
+      const after = document.querySelector('#grid .grow > span.freeze').getBoundingClientRect().left;
+      const last = document.querySelector('#grid .grow > span:last-child').getBoundingClientRect();
+      const box = s.getBoundingClientRect();
+      return { scrollWidth: s.scrollWidth, clientWidth: s.clientWidth, scrollLeft: Math.round(s.scrollLeft),
+               frozenMoved: Math.round(after - before), lastColVisible: last.right <= box.right + 2 && last.left >= box.left };
+    })()`);
+    console.log("horizontal:", JSON.stringify(hs));
+    await evalJs(`document.getElementById('grid').scrollIntoView({block:'start'}); true`);
+    await sleep(400);
+    const clip2 = await evalJs(`(() => { const g = document.getElementById('grid').getBoundingClientRect(); return { x: Math.round(g.x), y: Math.round(g.y), width: Math.round(g.width), height: Math.min(360, Math.round(g.height)), scale: 1 }; })()`);
+    const r2 = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { ...clip2, y: clip2.y + Math.round(await evalJs(`window.scrollY`)) } });
+    writeFileSync(join(outDir, "shot-grid-hscroll.png"), Buffer.from(r2.data, "base64"));
+    console.log("screenshot shot-grid-hscroll.png");
+    await evalJs(`document.getElementById('grid-scroller').scrollLeft = 0; document.getElementById('grid-scroller').scrollTop = 0; true`);
+    await sleep(300);
+  }
+  await shot("shot-4-grid.png");
+
   await evalJs(`document.getElementById('show-ms').click(); true`);
   await sleep(4000); // let basemap tiles arrive
   console.log("maplibre log:", logs.filter((l) => /maplibre/.test(l)).join(" | ").slice(0, 300));
@@ -112,10 +175,10 @@ if (ready) {
   // drill-down: clear filters, click the first plant link in the grid, check chips + totals, then remove it
   await evalJs(`document.getElementById('clear-all').click(); true`);
   await sleep(1500);
-  for (let i = 0; i < 40; i++) { await sleep(250); if (await evalJs(`document.querySelectorAll('#grid tbody a').length > 0`)) break; }
-  await evalJs(`document.querySelector('#grid tbody a').click(); true`);
+  for (let i = 0; i < 40; i++) { await sleep(250); if (await evalJs(`document.querySelectorAll('#grid .grow a:not(.ext)').length > 0`)) break; }
+  await evalJs(`document.querySelector('#grid .grow a:not(.ext)').click(); true`);
   await sleep(2500);
-  console.log("drill-down chips:", await evalJs(`[...document.querySelectorAll('.chip')].map(c => c.textContent).join(' ; ')`), "| totals:", await evalJs(`[...document.querySelectorAll('#totals .total')].map(t => t.textContent.trim().replace(/\s+/g,' ')).join(' | ')`), "| grid rows:", await evalJs(`document.querySelectorAll('#grid tbody tr').length`));
+  console.log("drill-down chips:", await evalJs(`[...document.querySelectorAll('.chip')].map(c => c.textContent).join(' ; ')`), "| totals:", await evalJs(`[...document.querySelectorAll('#totals .total')].map(t => t.textContent.trim().replace(/\s+/g,' ')).join(' | ')`), "| grid rows:", await evalJs(`document.querySelectorAll('#grid .grow:not([hidden])').length`));
   console.log("settle:", await evalJs(`document.getElementById('settle').textContent`));
   await sleep(1500); // map fly-to
   await shot("shot-3-drilldown.png");
@@ -123,7 +186,8 @@ if (ready) {
   {
     await evalJs(`document.getElementById('map').scrollIntoView({block: 'start'}); true`);
     await sleep(800);
-    const pt = await evalJs(`(() => { const m = window.__plantMap?.map; if (!m) return null; const p = m.project([-91.048, 32.007]); const r = m.getCanvas().getBoundingClientRect(); return { x: r.left + p.x, y: r.top + p.y }; })()`);
+    // the map has flown to the drilled plant, so click its own point rather than fixed coordinates
+    const pt = await evalJs(`(() => { const m = window.__plantMap?.map; if (!m) return null; const p = m.project(m.getCenter()); const r = m.getCanvas().getBoundingClientRect(); return { x: r.left + p.x, y: r.top + p.y }; })()`);
     if (pt) {
       await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y });
       await sleep(800);

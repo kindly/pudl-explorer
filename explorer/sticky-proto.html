@@ -1,0 +1,61 @@
+<!doctype html><meta charset="utf-8"><title>sticky rows prototype</title>
+<style>
+  body { font: 14px system-ui; margin: 1rem; }
+  .scroller { height: 400px; overflow: auto; border: 1px solid #ccc; position: relative; }
+  .tall { position: relative; }                 /* drives the scrollbar; rows live INSIDE it */
+  .viewport { position: sticky; top: 0; overflow: hidden; height: 400px; }
+  .rows { will-change: transform; }             /* translated by the sub-row remainder */
+  .row { display: grid; grid-template-columns: 4rem 14rem 8rem 6rem; height: 25px; align-items: center;
+         border-bottom: 1px solid #eee; padding: 0 .5rem; box-sizing: border-box; }
+  .row:nth-child(even) { background: #fafafa; }
+  .row a { color: #016b83; }
+  #log { font: 12px monospace; white-space: pre; margin-top: .5rem; }
+</style>
+<div class="scroller" id="s">
+  <div class="tall" id="tall">
+    <div class="viewport"><div class="rows" id="rows"></div></div>
+  </div>
+</div>
+<div id="log">click a link to test hit-testing through the fake scroll area</div>
+<script type="module">
+const TOTAL = 42257, ROW_H = 25, OVER = 4;
+const s = document.getElementById("s"), tall = document.getElementById("tall"), rows = document.getElementById("rows");
+tall.style.height = `${TOTAL * ROW_H}px`;
+const n = Math.ceil(400 / ROW_H) + OVER * 2;
+const pool = [];
+for (let i = 0; i < n; i++) {
+  const r = document.createElement("div"); r.className = "row";
+  const idx = document.createElement("span"), name = document.createElement("span"),
+        link = document.createElement("a"), num = document.createElement("span");
+  link.href = "#";
+  r.append(idx, name, link, num); rows.append(r);
+  pool.push({ r, idx, name, link, num });
+}
+let painted = -1, lastPaint = 0;
+function paint() {
+  const t0 = performance.now();
+  const first = Math.max(0, Math.min(Math.floor(s.scrollTop / ROW_H) - OVER, TOTAL - n));
+  rows.style.transform = `translateY(${-(s.scrollTop - first * ROW_H)}px)`;
+  if (first !== painted) {
+    for (let k = 0; k < n; k++) {
+      const i = first + k, p = pool[k];
+      p.idx.textContent = i + 1;
+      p.name.textContent = `Generator ${i + 1}`;
+      p.link.textContent = `plant ${(i * 7) % 9999}`;
+      p.link.dataset.row = i;
+      p.num.textContent = ((i * 37) % 1000) / 10;
+    }
+    painted = first;
+  }
+  lastPaint = performance.now() - t0;
+  window.__state = { first, offset: s.scrollTop - first * ROW_H, paintMs: lastPaint };
+}
+s.addEventListener("scroll", paint);
+rows.addEventListener("click", (e) => {
+  const a = e.target.closest("a"); if (!a) return;
+  e.preventDefault();
+  document.getElementById("log").textContent = `clicked row ${a.dataset.row} → ${a.textContent}`;
+  window.__clicked = Number(a.dataset.row);
+});
+paint();
+</script>

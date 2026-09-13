@@ -1,30 +1,33 @@
-// Runs every panel's SQL (as the app would build it) against both images, with a few filter states.
+// Every panel's SQL, as the app builds it, against both images.
 import { readFileSync } from "node:fs";
 import { instantiate } from "./vendor/facetful/core.js";
-import { DIMS, MEASURES, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, plantNameSql, NULL_TOKEN } from "./sql.js";
-const engine = await instantiate(readFileSync(new URL("./vendor/facetful/facetful_wasm.wasm", import.meta.url)));
-const pty = engine.openTable(readFileSync("../data/plant_tech_year.facetful")).handle;
-const gy = engine.openTable(readFileSync("../data/generator_year.facetful")).handle;
+import { DIMS, MEASURES, TABLES, NULL_TOKEN, facetSql, totalsSql, yearSql, seasonSql, mapSql,
+  gridSql, gridCountSql, plantCardSql, plantTechSql, plantFercSql, plantNameSql } from "./sql.js";
+const eng = await instantiate(readFileSync(new URL("./vendor/facetful/facetful_wasm.wasm", import.meta.url)));
+const H = {};
+for (const [k, f] of Object.entries(TABLES)) H[k] = eng.openTable(readFileSync(`../data/${f}.facetful`)).handle;
 const states = [
-  new Map(),
-  new Map([["fuel", ["gas", "coal"]], ["year", ["2018..2024"]]]),
-  new Map([["state", ["TX"]], ["q", ["wind"]]]),
-  new Map([["decade", ["2010", NULL_TOKEN]], ["cap", ["500+ MW"]], ["ba", [NULL_TOKEN]], ["plant", ["6008"]]]),
+  ["no filters", new Map()],
+  ["fuel+year", new Map([["fuel", ["gas", "coal"]], ["year", ["2018..2024"]]])],
+  ["state+search", new Map([["state", ["TX"]], ["q", ["wind"]]])],
+  ["blanks+plant", new Map([["decade", ["2010", NULL_TOKEN]], ["cap", ["500+ MW"]], ["ba", [NULL_TOKEN]], ["plant", ["3"]]])],
 ];
-let fails = 0, worst = [];
-for (const m of Object.keys(MEASURES)) for (const [i, f] of states.entries()) {
-  const measure = MEASURES[m];
-  const plan = [[pty, totalsSql(f, 2026)], [pty, yearSql(f, measure)], [pty, seasonSql(f, measure)], [pty, mapSql(f, measure)], [pty, plantNameSql(6008)],
-    [gy, gridSql(f, ["net_generation_mwh", "desc"])], [gy, gridSql(f, ["plant_name_eia", "asc"])],
-    ...DIMS.flatMap((d) => ["k", "n", "v"].map((s) => [pty, facetSql(d, f, measure, s)]))].filter(([, sql]) => sql);
+let fails = 0, n = 0, slow = [];
+for (const [mk, m] of Object.entries(MEASURES)) for (const [sl, f] of states) {
+  const plan = [
+    [m.table, totalsSql(f, m)], [m.table, yearSql(f, m)], ["pty", seasonSql(f, m)], [m.table, mapSql(f, m)],
+    ["gw", gridCountSql(f)], ["gw", gridSql(f, ["twh", "desc"])], ["gw", gridSql(f, ["plant_name_eia", "asc"], { offset: 2000 })],
+    ["gw", plantCardSql(3, f)], ["gw", plantTechSql(3, f)], ["pty", plantFercSql(3, f)], ["gw", plantNameSql(3)],
+    ...DIMS.filter((d) => !d.group || d.group === m.group).flatMap((d) => ["k", "n", "v"].map((s) => [m.table, facetSql(d, f, m, s)])),
+  ].filter(([, sql]) => sql);
   let tot = 0;
-  for (const [h, sql] of plan) {
-    try { const t = performance.now(); const r = engine.query(h, sql); const ms = performance.now() - t; tot += ms; worst.push([ms, sql.slice(0, 90)]);
-      if (m === "twh" && i === 0 && sql.startsWith("select count(*)")) console.log("totals:", r.columns.map((c) => `${c.name}=${c.values?.[0]}`).join(" "));
-    } catch (e) { fails++; console.log(`FAIL [${m} state${i}] ${sql}\n   ${e.message.split("\n")[0]}`); }
+  for (const [tbl, sql] of plan) {
+    n++;
+    try { const t = performance.now(); eng.query(H[tbl], sql); const ms = performance.now() - t; tot += ms; slow.push([ms, sql.slice(0, 70)]); }
+    catch (e) { fails++; console.log(`FAIL [${mk} / ${sl} / ${tbl}]\n  ${sql.slice(0, 150)}\n  ${e.message.split("\n")[0]}`); }
   }
-  console.log(`${m} state${i}: ${plan.length} queries, ${tot.toFixed(0)} ms total`);
+  console.log(`${mk.padEnd(9)} ${sl.padEnd(14)} ${String(plan.length).padStart(3)} queries ${tot.toFixed(0).padStart(5)} ms`);
 }
-worst.sort((a, b) => b[0] - a[0]);
-console.log("slowest:", worst.slice(0, 5).map(([ms, s]) => `${ms.toFixed(1)}ms ${s}`).join("\n         "));
-console.log(fails ? `${fails} failures` : "all panel SQL ok");
+slow.sort((a, b) => b[0] - a[0]);
+console.log("\nslowest:\n  " + slow.slice(0, 4).map(([ms, s]) => `${ms.toFixed(1)}ms ${s}`).join("\n  "));
+console.log(fails ? `\n${fails} of ${n} FAILED` : `\nall ${n} queries ok`);

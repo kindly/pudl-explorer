@@ -1,22 +1,25 @@
-// The only module that writes SQL. Mirrors gem-explorer's sql.ts: one filter
-// state -> a WHERE clause; every panel is a GROUP BY over that clause, with
-// the option of leaving out one dimension ("except") so a facet never
-// collapses to its own selection.
+// The only module that writes SQL.
 //
-// Two tables share the dimension column names, so the same WHERE works on both:
-//   plant_tech_year (plant x technology x status x year) - facets, totals, charts, map
-//   generator_year  (generator x year)                    - grid / drill-down
+// Two tables, and a measure decides which one a panel reads:
 //
-// facetful dialect notes learned the hard way (see ../README.md):
-//   - GROUP BY must repeat the expression, aliases are not accepted there
-//   - no scientific notation literals (1e6) - write 1000000.0
-//   - LIKE is already case-insensitive; lower() defeats the dictionary fast path
-//   - table is always `t` in SQL; the JS `{ table }` option picks which one
+//   gw  generator_tech_wide   plant x generator x technology, 42,257 rows, yearly series as COLUMNS
+//                             (gen_2010..gen_2026, cap_*, co2_*). Drives facets, totals, years,
+//                             map and the detail grid for every measure it has columns for.
+//   pty plant_tech_year       plant x technology x status x year, 230,891 rows. Keeps the monthly
+//                             columns (seasonality), the FERC cost columns and fuel cost / fuel burned.
+//
+// On `gw` a year-range filter is not a WHERE: it chooses which year columns to add up. That is what
+// keeps every measure filter-responsive without storing a row per year, and it is why the sparkline
+// series arrives with the row. Columns are zero-filled, so sums are plain `a + b + c` — wrapping them
+// in coalesce() costs 3.8x as much (docs/facetful-notes.md).
+//
+// facetful dialect notes: GROUP BY repeats the expression, no aliases; no scientific notation (1e6);
+// LIKE is already case-insensitive and lower() defeats the dictionary fast path; the table is always
+// `t` in SQL and the JS `{ table }` option picks which one.
 
-export const TABLES = {
-  pty: { file: "plant_tech_year", label: "plant × technology × year" },
-  gy: { file: "generator_year", label: "generator × year" },
-};
+/** Year range the wide table was built over; see scripts/build-generator-wide.sql. */
+export const YEARS = Array.from({ length: 17 }, (_, i) => 2010 + i);
+export const TABLES = { gw: "generator_tech_wide", pty: "plant_tech_year" };
 
 export const DIMS = [
   { key: "fuel", col: "fuel_type_code_pudl", title: "Fuel type", swatch: true },
@@ -25,14 +28,13 @@ export const DIMS = [
   { key: "state", col: "state", title: "State" },
   { key: "ba", col: "ba_code", title: "Balancing authority" },
   { key: "utility", col: "utility_name_eia", title: "Utility (top 300)", topN: 300 },
-  { key: "cap", col: "capacity_bucket", title: "Site capacity (plant × technology)", fixedOrder: ["< 1 MW", "1-10 MW", "10-100 MW", "100-500 MW", "500+ MW"] },
+  { key: "cap", col: "capacity_bucket", title: "Site capacity", fixedOrder: ["< 1 MW", "1-10 MW", "10-100 MW", "100-500 MW", "500+ MW"] },
   { key: "decade", col: "operating_decade", title: "First commissioned (decade)", orderBy: "dim", numeric: true },
-  // measure-specific facets: shown only while a measure of the same group is selected
+  // measure-specific: shown only while a measure of the same group is selected
   { key: "co2b", col: "co2_intensity_bucket", title: "CO₂ intensity (t/MWh, CEMS)", fixedOrder: ["< 0.2", "0.2-0.4", "0.4-0.6", "0.6-0.9", "0.9+"], group: "cems" },
   { key: "cems", col: "cems_allocation", title: "CEMS coverage", fixedOrder: ["measured", "capacity-split", "plant-fallback", "mixed"], group: "cems" },
   { key: "ferc", col: "ferc_allocation", title: "FERC 1 costs", fixedOrder: ["plant_type match", "largest technology"], group: "ferc" },
 ];
-// Dimensions with no facet list: the year brush and the plant drill-down.
 export const HIDDEN_DIMS = [
   { key: "year", col: "year", title: "Years", numeric: true },
   { key: "plant", col: "plant_id_eia", title: "Plant", numeric: true },
@@ -40,50 +42,82 @@ export const HIDDEN_DIMS = [
 export const ALL_DIMS = [...DIMS, ...HIDDEN_DIMS];
 export const SEARCH_PARAM = "q";
 const SEARCH_COLS = ["plant_name_eia", "utility_name_eia"];
+export const NULL_TOKEN = " null";
 
+/**
+ * A measure knows which table it can be computed on.
+ *   table "gw": `prefix` names the year-column family; sums are built per year range.
+ *   table "pty": `expr` is a plain aggregate over the long table.
+ * `ratio` divides two families, counting only rows that have the numerator (CEMS coverage).
+ * `monthly` names the seasonality columns, which always live on `pty`.
+ */
 export const MEASURES = {
-  twh: { label: "Generation (TWh)", short: "Gen TWh", expr: "round(sum(net_generation_mwh)/1000000.0, 3)", unit: "TWh", digits: 1, monthly: { prefix: "gen", scale: 1000000 } },
-  gw: { label: "Avg capacity (GW)", short: "Cap GW", expr: "round(sum(capacity_mw_months)/1000.0, 3)", unit: "GW", digits: 1, perMonth: true },
-  cost: { label: "Fuel cost ($bn)", short: "Fuel $bn", expr: "round(sum(total_fuel_cost)/1000000000.0, 3)", unit: "$bn", digits: 2, monthly: { prefix: "cost", scale: 1000000000 } },
-  tbtu: { label: "Fuel burned (TBtu)", short: "Fuel TBtu", expr: "round(sum(total_mmbtu)/1000000.0, 3)", unit: "TBtu", digits: 1, monthly: { prefix: "mmbtu", scale: 1000000 } },
-  co2: { label: "CO₂ (Mt)", short: "CO₂ Mt", expr: "round(sum(co2_tons)/1000000.0, 3)", unit: "Mt", digits: 2, monthly: { prefix: "co2", scale: 1000000 }, group: "cems" },
-  co2_mwh: { label: "CO₂ intensity (t/MWh)", short: "t/MWh", expr: "round(sum(co2_tons)/sum(case when co2_tons is not null then net_generation_mwh end), 4)", unit: "t/MWh", digits: 3, ratio: true, group: "cems" },
-  co2_mw: { label: "CO₂ per MW (t/MW·yr)", short: "t/MW·yr", expr: "round(sum(co2_tons)/(sum(case when co2_tons is not null then capacity_mw_months end)/12.0), 2)", unit: "t/MW·yr", digits: 0, ratio: true, group: "cems" },
-  capex: { label: "Plant in service ($bn, FERC 1)", short: "Capex $bn", expr: "round(sum(ferc_capex_total)/1000000000.0, 3)", unit: "$bn", digits: 1, group: "ferc" },
-  opex_mwh: { label: "Operating cost ($/MWh, FERC 1)", short: "Opex $/MWh", expr: "round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 2)", unit: "$/MWh", digits: 1, ratio: true, group: "ferc" },
-  plants: { label: "Plants", short: "Plants", expr: "count(distinct plant_id_eia)", unit: "plants", digits: 0 },
+  twh: { label: "Generation (TWh)", short: "Gen TWh", table: "gw", prefix: "gen", scale: 1000000, unit: "TWh", digits: 1, monthly: { prefix: "gen", scale: 1000000 } },
+  gw: { label: "Avg capacity (GW)", short: "Cap GW", table: "gw", prefix: "cap", scale: 1000, unit: "GW", digits: 1, perMonth: true },
+  co2: { label: "CO₂ (Mt)", short: "CO₂ Mt", table: "gw", prefix: "co2", scale: 1000000, unit: "Mt", digits: 2, group: "cems", monthly: { prefix: "co2", scale: 1000000 } },
+  co2_mwh: { label: "CO₂ intensity (t/MWh)", short: "t/MWh", table: "gw", ratio: ["co2", "gen"], scale: 1, unit: "t/MWh", digits: 3, group: "cems" },
+  co2_mw: { label: "CO₂ per MW (t/MW·yr)", short: "t/MW·yr", table: "gw", ratio: ["co2", "cap"], scale: 1 / 12, unit: "t/MW·yr", digits: 0, group: "cems" },
+  cost: { label: "Fuel cost ($bn)", short: "Fuel $bn", table: "pty", expr: "round(sum(total_fuel_cost)/1000000000.0, 3)", unit: "$bn", digits: 2, monthly: { prefix: "cost", scale: 1000000000 } },
+  tbtu: { label: "Fuel burned (TBtu)", short: "Fuel TBtu", table: "pty", expr: "round(sum(total_mmbtu)/1000000.0, 3)", unit: "TBtu", digits: 1, monthly: { prefix: "mmbtu", scale: 1000000 } },
+  capex: { label: "Plant in service ($bn, FERC 1)", short: "Capex $bn", table: "pty", expr: "round(sum(ferc_capex_total)/1000000000.0, 3)", unit: "$bn", digits: 1, group: "ferc" },
+  opex_mwh: { label: "Operating cost ($/MWh, FERC 1)", short: "Opex $/MWh", table: "pty", expr: "round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 2)", unit: "$/MWh", digits: 1, group: "ferc" },
 };
 
-export function ident(name) {
-  return `"${String(name).replace(/"/g, '""')}"`;
-}
-export function lit(v) {
-  return `'${String(v).replace(/'/g, "''")}'`;
-}
+export function ident(name) { return `"${String(name).replace(/"/g, '""')}"`; }
+export function lit(v) { return `'${String(v).replace(/'/g, "''")}'`; }
 function parseRange(v) {
   const m = /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(v);
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
-export const NULL_TOKEN = " null";
 
-/** Free-text search: words are AND'ed, each matched across the search columns. */
+/** Years the current filter selects, as a subset of YEARS. */
+export function yearsIn(filters) {
+  const vals = filters.get("year") ?? [];
+  if (!vals.length) return YEARS;
+  const keep = new Set();
+  for (const v of vals) {
+    const r = parseRange(v);
+    if (r) for (const y of YEARS) { if (y >= r[0] && y <= r[1]) keep.add(y); }
+    else if (YEARS.includes(Number(v))) keep.add(Number(v));
+  }
+  return keep.size ? YEARS.filter((y) => keep.has(y)) : YEARS;
+}
+
+/** `gen_2018 + gen_2019 + …` over the selected years. Zero-filled, so no coalesce. */
+const span = (prefix, years) => years.map((y) => `${prefix}_${y}`).join(" + ");
+
+/** A measure as a scalar expression for one row (the grid), or wrapped in sum() (grouped panels). */
+export function measureExpr(measure, years, { grouped = true } = {}) {
+  if (measure.table === "pty") return measure.expr;
+  const total = (p) => (grouped ? `sum(${span(p, years)})` : `(${span(p, years)})`);
+  if (measure.ratio) {
+    const [num, den] = measure.ratio;
+    // denominator counts only rows that carry the numerator, so intensity is not diluted by non-CEMS plant
+    const gated = grouped
+      ? `sum(case when has_cems = 1 then (${span(den, years)}) else 0 end)`
+      : `(case when has_cems = 1 then (${span(den, years)}) else 0 end)`;
+    const scale = measure.scale === 1 ? "" : ` * ${measure.scale}`;
+    return `round(${total(num)} / nullif(${gated}, 0)${scale}, 4)`;
+  }
+  return `round(${total(measure.prefix)}/${measure.scale}.0, 3)`;
+}
+
 function searchClause(q) {
   const words = q.trim().split(/\s+/).filter(Boolean).slice(0, 6);
   if (!words.length) return "";
-  return words
-    .map((w) => "(" + SEARCH_COLS.map((c) => `${ident(c)} like ${lit("%" + w + "%")}`).join(" or ") + ")")
-    .join(" and ");
+  return words.map((w) => "(" + SEARCH_COLS.map((c) => `${ident(c)} like ${lit("%" + w + "%")}`).join(" or ") + ")").join(" and ");
 }
 
 /**
- * filters: Map<key, string[]>  where key is a DIM key or SEARCH_PARAM.
- * Values: plain literals, "lo..hi" ranges (BETWEEN), or NULL_TOKEN for blanks.
+ * filters: Map<key, string[]>. On `gw` the year filter is left out — it picks columns, not rows —
+ * but rows with no capacity in the selected window are dropped so the lists stay honest.
  */
-export function whereClause(filters, { except, extra } = {}) {
+export function whereClause(filters, { table = "gw", except, extra } = {}) {
   const parts = [];
   if (extra) parts.push(extra);
   for (const [key, values] of filters) {
     if (key === except || !values?.length) continue;
+    if (key === "year" && table === "gw") continue;
     if (key === SEARCH_PARAM) {
       const c = searchClause(values.join(" "));
       if (c) parts.push(c);
@@ -103,103 +137,159 @@ export function whereClause(filters, { except, extra } = {}) {
     if (alts.length === 1) parts.push(alts[0]);
     else if (alts.length > 1) parts.push("(" + alts.join(" or ") + ")");
   }
+  if (table === "gw" && except !== "year") {
+    const years = yearsIn(filters);
+    if (years.length < YEARS.length) parts.push(`(${span("cap", years)}) > 0`);
+  }
   return parts.length ? `where ${parts.join(" and ")}` : "";
 }
 
-/** One facet list: value, row count, measure. */
+/** Counts shown in every facet row and in the totals: plants on the face, generators in the tooltip. */
+const COUNTS = { gw: "count(distinct plant_id_eia) as n, count(distinct gen_key) as g", pty: "count(distinct plant_id_eia) as n" };
+
 export function facetSql(dim, filters, measure, sort) {
+  const table = measure.table;
   const d = ident(dim.col);
   const order = sort === "k" ? `${d}` : sort === "n" ? "n desc" : "v desc";
+  const years = yearsIn(filters);
   return (
-    `select ${d} as k, count(*) as n, ${measure.expr} as v from t ` +
-    `${whereClause(filters, { except: dim.key })} group by ${d} order by ${order} limit ${dim.topN ?? 500}`
+    `select ${d} as k, ${COUNTS[table]}, ${measureExpr(measure, years)} as v from t ` +
+    `${whereClause(filters, { table, except: dim.key })} group by ${d} order by ${order} limit ${dim.topN ?? 500}`
   );
 }
 
-/** Header totals. `maxYear` lets us learn how many months the final (partial) year holds. */
-export function totalsSql(filters, maxYear) {
+/** Months of data actually reported per year — the final year is partial, so average capacity
+ *  must divide by the real period length rather than 12 × years. Run once at boot. */
+export function monthsPerYearSql() {
+  return `select ${YEARS.map((y) => `max(mon_${y}) as m${y}`).join(", ")} from t`;
+}
+
+export function totalsSql(filters, measure) {
+  const years = yearsIn(filters);
+  if (measure.table === "pty") {
+    return `select count(distinct plant_id_eia) as plants, round(sum(net_generation_mwh)/1000000.0, 1) as twh, ` +
+      `round(sum(capacity_mw_months)/1000.0, 1) as gw_months, round(sum(net_generation_mwh)/(sum(capacity_mw_months)*730.5), 4) as cf ` +
+      `from t ${whereClause(filters, { table: "pty" })}`;
+  }
   return (
-    `select count(*) as n, count(distinct plant_id_eia) as plants, min(year) as y0, max(year) as y1, ` +
-    `max(case when year = ${Number(maxYear)} then n_months else 0 end) as m_last, ` +
-    `round(sum(net_generation_mwh)/1000000.0, 1) as twh, round(sum(capacity_mw_months)/1000.0, 1) as gw_months, ` +
-    `round(sum(net_generation_mwh)/(sum(capacity_mw_months)*730.5), 4) as cf from t ${whereClause(filters)}`
+    `select count(distinct plant_id_eia) as plants, count(distinct gen_key) as gens, ` +
+    `round(sum(${span("gen", years)})/1000000.0, 1) as twh, round(sum(${span("cap", years)})/1000.0, 1) as gw_months, ` +
+    `round(sum(${span("gen", years)})/(sum(${span("cap", years)})*730.5), 4) as cf from t ${whereClause(filters, { table: "gw" })}`
   );
 }
 
-/** Stacked year chart: year x fuel; `m` = months reported in that year so avg GW is right for partial years. */
+/**
+ * Years chart. On `gw` one row per fuel with a column per year (the app unpivots); the year filter is
+ * deliberately ignored here so the brushed range shows dimmed rather than vanishing.
+ */
 export function yearSql(filters, measure) {
-  return (
-    `select year as k, fuel_type_code_pudl as f, ${measure.expr} as v, max(n_months) as m from t ` +
-    `${whereClause(filters, { except: "year" })} group by year, fuel_type_code_pudl order by year, fuel_type_code_pudl`
-  );
+  if (measure.table === "pty") {
+    return `select year as k, fuel_type_code_pudl as f, ${measure.expr} as v, max(n_months) as m from t ` +
+      `${whereClause(filters, { table: "pty", except: "year" })} group by year, fuel_type_code_pudl order by year, fuel_type_code_pudl`;
+  }
+  const per = (y) => {
+    if (measure.ratio) {
+      const [num, den] = measure.ratio;
+      const scale = measure.scale === 1 ? "" : ` * ${measure.scale}`;
+      return `round(sum(${num}_${y}) / nullif(sum(case when has_cems = 1 then ${den}_${y} else 0 end), 0)${scale}, 4) as y${y}`;
+    }
+    return `round(sum(${measure.prefix}_${y})/${measure.scale}.0, 3) as y${y}`;
+  };
+  return `select fuel_type_code_pudl as f, ${YEARS.map(per).join(", ")} from t ` +
+    `${whereClause(filters, { table: "gw", except: "year" })} group by fuel_type_code_pudl order by fuel_type_code_pudl`;
 }
 
-/** Seasonality from the twelve monthly columns, stacked by fuel. Null for measures without monthly columns. */
+/** Seasonality always reads the monthly columns on `pty`. */
 export function seasonSql(filters, measure) {
   if (!measure.monthly) return null;
-  const cols = Array.from({ length: 12 }, (_, i) => `round(sum(${measure.monthly.prefix}_m${String(i + 1).padStart(2, "0")})/${measure.monthly.scale}.0, 3) as m${i + 1}`).join(", ");
-  return `select fuel_type_code_pudl as f, ${cols} from t ${whereClause(filters)} group by fuel_type_code_pudl order by fuel_type_code_pudl`;
+  const cols = Array.from({ length: 12 }, (_, i) =>
+    `round(sum(${measure.monthly.prefix}_m${String(i + 1).padStart(2, "0")})/${measure.monthly.scale}.0, 3) as m${i + 1}`).join(", ");
+  return `select fuel_type_code_pudl as f, ${cols} from t ${whereClause(filters, { table: "pty" })} group by fuel_type_code_pudl order by fuel_type_code_pudl`;
 }
 
 export function mapSql(filters, measure) {
+  const table = measure.table;
+  const years = yearsIn(filters);
   return (
-    `select plant_id_eia as p, fuel_type_code_pudl as f, min(latitude) as lat, min(longitude) as lon, ${measure.expr} as v ` +
-    `from t ${whereClause(filters, { extra: "latitude is not null" })} group by plant_id_eia, fuel_type_code_pudl order by v desc`
+    `select plant_id_eia as p, fuel_type_code_pudl as f, min(latitude) as lat, min(longitude) as lon, ${measureExpr(measure, years)} as v ` +
+    `from t ${whereClause(filters, { table, extra: "latitude is not null" })} group by plant_id_eia, fuel_type_code_pudl order by v desc`
   );
 }
 
-/** Everything the map popup shows for one plant, under the current filters (except the plant filter itself). */
-export function plantCardSql(plantId, filters) {
+/** One plant's card in the map popup. */
+export function plantCardSql(plantId, filters, measure) {
   const f = new Map(filters); f.delete("plant");
+  const years = yearsIn(f);
   return (
     `select plant_name_eia as name, state as state, utility_name_eia as utility, ba_code as ba, gem_wiki_url as wiki, gem_plant_name as gem, ` +
-    `min(year) as y0, max(year) as y1, max(n_months) as m_last, ` +
-    `round(sum(net_generation_mwh)/1000000.0, 2) as twh, round(sum(capacity_mw_months)/1000.0, 3) as gw_months, ` +
-    `round(sum(net_generation_mwh)/(sum(capacity_mw_months)*730.5), 3) as cf, round(sum(co2_tons)/1000000.0, 3) as co2_mt, ` +
-    `round(sum(co2_tons)/sum(case when co2_tons is not null then net_generation_mwh end), 3) as co2_mwh, ` +
-    `round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 1) as opex_mwh, ` +
-    `min(first_operating_year) as first_year ` +
-    `from t ${whereClause(f, { extra: `plant_id_eia = ${Number(plantId)}` })} ` +
+    `count(distinct gen_key) as gens, min(first_operating_year) as first_year, ` +
+    `round(sum(${span("gen", years)})/1000000.0, 2) as twh, round(sum(${span("cap", years)})/1000.0, 3) as gw_months, ` +
+    `round(sum(${span("gen", years)})/(sum(${span("cap", years)})*730.5), 3) as cf, ` +
+    `round(sum(${span("co2", years)})/1000000.0, 3) as co2_mt, ` +
+    `round(sum(${span("co2", years)})/nullif(sum(case when has_cems = 1 then (${span("gen", years)}) else 0 end), 0), 3) as co2_mwh ` +
+    `from t ${whereClause(f, { table: "gw", extra: `plant_id_eia = ${Number(plantId)}` })} ` +
     `group by plant_name_eia, state, utility_name_eia, ba_code, gem_wiki_url, gem_plant_name order by twh desc limit 1`
   );
 }
 
-/** Technology mix of one plant under the current filters: avg MW per technology (capacity-months / months later). */
 export function plantTechSql(plantId, filters) {
   const f = new Map(filters); f.delete("plant");
-  return (
-    `select technology_description as k, round(sum(capacity_mw_months), 1) as cap_months, round(sum(net_generation_mwh)/1000000.0, 3) as twh ` +
-    `from t ${whereClause(f, { extra: `plant_id_eia = ${Number(plantId)}` })} group by technology_description order by cap_months desc limit 8`
-  );
+  const years = yearsIn(f);
+  return `select technology_description as k, round(sum(${span("cap", years)}), 1) as cap_months, round(sum(${span("gen", years)})/1000000.0, 3) as twh ` +
+    `from t ${whereClause(f, { table: "gw", extra: `plant_id_eia = ${Number(plantId)}` })} group by technology_description order by cap_months desc limit 8`;
 }
 
 export function plantNameSql(plantId) {
-  return `select plant_name_eia as name, state as state, gem_wiki_url as wiki, gem_plant_name as gem from t where plant_id_eia = ${Number(plantId)} order by year desc limit 1`;
+  return `select plant_name_eia as name, state as state, gem_wiki_url as wiki from t where plant_id_eia = ${Number(plantId)} limit 1`;
 }
 
+// ---- the detail grid -------------------------------------------------------
+// `series` columns carry the sparkline data back with the row, so there is no second query.
 export const GRID_COLS = [
-  { col: "year", label: "Year", numeric: true, digits: 0, plain: true },
-  { col: "plant_name_eia", label: "Plant", link: true },
-  { col: "generator_id", label: "Gen" },
-  { col: "utility_name_eia", label: "Utility" },
-  { col: "state", label: "State" },
-  { col: "technology_description", label: "Technology" },
-  { col: "fuel_type_code_pudl", label: "Fuel" },
-  { col: "operational_status", label: "Status" },
-  { col: "generator_operating_date", label: "Online", date: true },
-  { col: "generator_retirement_date", label: "Retired", date: true },
-  { col: "capacity_mw", label: "MW", numeric: true, digits: 1 },
-  { col: "net_generation_mwh", label: "Net MWh", numeric: true, digits: 0 },
-  { col: "capacity_factor", label: "CF", numeric: true, digits: 2 },
-  { col: "heat_rate_mmbtu_per_mwh", label: "Heat rate", numeric: true, digits: 2 },
-  { col: "fuel_cost_per_mwh", label: "$/MWh", numeric: true, digits: 1 },
-  { col: "co2_tons", label: "CO₂ t", numeric: true, digits: 0 },
-  { col: "co2_tons_per_mwh", label: "t/MWh", numeric: true, digits: 3 },
-  { col: "gem_wiki_url", label: "GEM", external: true },
+  { col: "plant_name_eia", label: "Plant", link: true, w: "11.5rem", freeze: true },
+  { col: "generator_id", label: "Gen", w: "3.2rem", freeze: true },
+  { col: "utility_name_eia", label: "Utility", w: "8rem" },
+  { col: "technology_description", label: "Technology", w: "8rem" },
+  { col: "operational_status", label: "Status", w: "4.8rem", pill: true },
+  { col: "capacity_mw", label: "MW", numeric: true, digits: 1, w: "4rem" },
+  { col: "twh", label: "TWh", numeric: true, digits: 2, w: "3.8rem" },
+  { col: "spark_gen", label: "Generation yearly", series: "gen", w: "8.4rem", noSort: true },
+  { col: "cf", label: "CF", numeric: true, pct: true, w: "3rem" },
+  { col: "spark_cf", label: "Capacity factor yearly", series: "cf", w: "8.4rem", noSort: true },
+  { col: "co2_mt", label: "Mt", numeric: true, digits: 2, w: "3.6rem", cems: true },
+  { col: "spark_co2", label: "CO₂ yearly", series: "co2", w: "8.4rem", noSort: true },
+  { col: "first_operating_year", label: "Online", numeric: true, digits: 0, plain: true, w: "4rem" },
+  { col: "gem_wiki_url", label: "GEM", external: true, w: "3.4rem" },
 ];
+const SORTABLE = new Set(GRID_COLS.filter((c) => !c.series).map((c) => c.col));
 
-export function gridSql(filters, sort, limit = 100) {
-  const cols = [...GRID_COLS.map((c) => ident(c.col)), ident("plant_id_eia")].join(", ");
+export function gridSql(filters, sort, { limit = 100, offset = 0 } = {}) {
+  const years = yearsIn(filters);
+  const gen = span("gen", years), cap = span("cap", years), co2 = span("co2", years);
+  const cols = [
+    "plant_id_eia", "gen_key", "plant_name_eia", "state", "generator_id", "utility_name_eia",
+    "technology_description", "operational_status", "capacity_mw", "first_operating_year",
+    "retirement_year", "gem_wiki_url", "has_cems",
+  ].map(ident).join(", ");
+  const series = [...YEARS.map((y) => `gen_${y}`), ...YEARS.map((y) => `cap_${y}`), ...YEARS.map((y) => `co2_${y}`)].join(", ");
   const [col, dir] = sort;
-  return `select ${cols} from t ${whereClause(filters)} order by ${ident(col)} ${dir === "asc" ? "asc" : "desc"} limit ${limit}`;
+  const key = SORTABLE.has(col) ? col : "twh";
+  return (
+    `select ${cols}, round((${gen})/1000000.0, 4) as twh, round((${co2})/1000000.0, 4) as co2_mt, ` +
+    `round((${gen})/nullif((${cap})*730.5, 0), 4) as cf, ${series} ` +
+    `from t ${whereClause(filters, { table: "gw" })} ` +
+    `order by ${ident(key)} ${dir === "asc" ? "asc" : "desc"} limit ${limit} offset ${offset}`
+  );
+}
+
+export function gridCountSql(filters) {
+  return `select count(*) as rows, count(distinct plant_id_eia) as plants, count(distinct gen_key) as gens from t ${whereClause(filters, { table: "gw" })}`;
+}
+
+/** FERC costs for one plant, for the map card (they live on `pty`). */
+export function plantFercSql(plantId, filters) {
+  const f = new Map(filters); f.delete("plant");
+  return `select round(sum(ferc_capex_total)/1000000000.0, 2) as capex_bn, ` +
+    `round(sum(ferc_opex_total)/sum(case when ferc_opex_total is not null then net_generation_mwh end), 1) as opex_mwh ` +
+    `from t ${whereClause(f, { table: "pty", extra: `plant_id_eia = ${Number(plantId)}` })}`;
 }
