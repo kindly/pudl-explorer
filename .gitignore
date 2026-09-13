@@ -24,3 +24,6 @@ data/*.parquet
 .vscode
 .zprofile
 .zshrc
+
+# npm packages: vendor/facetful-<version> is the copy that gets served and committed
+explorer/node_modules/

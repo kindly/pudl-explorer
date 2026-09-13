@@ -1,6 +1,7 @@
 // Fair comparison: the whole panel set as the page actually runs it, on each shape.
 import { readFileSync } from "node:fs";
-const eng = await (await import("./vendor/facetful/core.js")).instantiate(readFileSync("./vendor/facetful/facetful_wasm.wasm"));
+import { coreUrl, wasmUrl } from "./engine.js";
+const eng = await (await import(coreUrl.href)).instantiate(readFileSync(wasmUrl));
 const H = {};
 for (const [k, f] of [["pty", "plant_tech_year"], ["gy", "generator_year"], ["zf", "generator_tech_wide"]])
   H[k] = eng.openTable(readFileSync(`../data/${f}.facetful`)).handle;

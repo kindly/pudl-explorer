@@ -1,6 +1,7 @@
 // What each count costs, and what each facet's natural unit is.
 import { readFileSync } from "node:fs";
-const eng = await (await import("./vendor/facetful/core.js")).instantiate(readFileSync("./vendor/facetful/facetful_wasm.wasm"));
+import { coreUrl, wasmUrl } from "./engine.js";
+const eng = await (await import(coreUrl.href)).instantiate(readFileSync(wasmUrl));
 const h = eng.openTable(readFileSync("../data/generator_tech_wide.facetful")).handle;
 const Y = [...Array(17).keys()].map((i) => 2010 + i);
 const S = `sum(${Y.map((y) => `gen_${y}`).join(" + ")})`;

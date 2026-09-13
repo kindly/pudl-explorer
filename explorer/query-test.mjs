@@ -1,7 +1,8 @@
 // Run ad-hoc SQL against the prebuilt image: node query-test.mjs [sqlfile]
 import { readFileSync } from "node:fs";
-import { instantiate } from "./vendor/facetful/core.js";
-const engine = await instantiate(readFileSync(new URL("./vendor/facetful/facetful_wasm.wasm", import.meta.url)));
+import { coreUrl, wasmUrl } from "./engine.js";
+const { instantiate } = await import(coreUrl.href);
+const engine = await instantiate(readFileSync(wasmUrl));
 const { handle, rows } = engine.openTable(readFileSync("../data/eia_generator_month_2010plus.facetful"));
 console.log("rows", rows);
 const dec = new TextDecoder();

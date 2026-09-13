@@ -1,13 +1,14 @@
 // Node harness: parquet -> facetful image (same code path as the browser worker),
 // saves data/<name>.facetful and runs the explorer's candidate queries with timings.
 import { readFileSync, writeFileSync } from "node:fs";
-import { instantiate } from "./vendor/facetful/core.js";
-import { parquetToColumns } from "./vendor/facetful/parquet.js";
+import { coreUrl, parquetUrl, wasmUrl } from "./engine.js";
+const { instantiate } = await import(coreUrl.href);
+const { parquetToColumns } = await import(parquetUrl.href);
 import * as hp from "./vendor/hyparquet/src/index.js";
 
 const src = process.argv[2] ?? "../data/eia_generator_month_2010plus.parquet";
 const out = src.replace(/\.parquet$/, ".facetful");
-const engine = await instantiate(readFileSync(new URL("./vendor/facetful/facetful_wasm.wasm", import.meta.url)));
+const engine = await instantiate(readFileSync(wasmUrl));
 let t0 = performance.now();
 const buf = readFileSync(src);
 const { rows, columns } = await parquetToColumns(hp, buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));

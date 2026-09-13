@@ -1,9 +1,10 @@
 // Every panel's SQL, as the app builds it, against both images.
 import { readFileSync } from "node:fs";
-import { instantiate } from "./vendor/facetful/core.js";
+import { coreUrl, wasmUrl } from "./engine.js";
+const { instantiate } = await import(coreUrl.href);
 import { DIMS, MEASURES, TABLES, NULL_TOKEN, facetSql, totalsSql, yearSql, seasonSql, mapSql,
   gridSql, gridCountSql, plantCardSql, plantTechSql, plantFercSql, plantNameSql } from "./sql.js";
-const eng = await instantiate(readFileSync(new URL("./vendor/facetful/facetful_wasm.wasm", import.meta.url)));
+const eng = await instantiate(readFileSync(wasmUrl));
 const H = {};
 for (const [k, f] of Object.entries(TABLES)) H[k] = eng.openTable(readFileSync(`../data/${f}.facetful`)).handle;
 const states = [

@@ -1,6 +1,7 @@
 // Same queries on both builds: every cell must match.
 import { readFileSync } from "node:fs";
-const dirs = { old: process.env.TMPDIR + "/facetful-old", new: "./vendor/facetful" };
+import { DIR } from "./engine.js";
+const dirs = { old: process.env.TMPDIR + "/facetful-old", new: DIR.replace(/\/$/, "") };
 const eng = {};
 for (const [t, d] of Object.entries(dirs)) eng[t] = await (await import(`${d}/core.js`)).instantiate(readFileSync(`${d}/facetful_wasm.wasm`));
 const dec = new TextDecoder();

@@ -1,0 +1,14 @@
+{
+  "name": "pudl-explorer",
+  "private": true,
+  "type": "module",
+  "description": "No-build faceted explorer for PUDL data. vendor/facetful is copied from the npm package by sync-vendor; never edit it by hand.",
+  "scripts": {
+    "sync-vendor": "node sync-vendor.mjs",
+    "stamp": "node stamp.mjs",
+    "test": "node sync-vendor.mjs --check && node sql-smoke.mjs && node gridcheck.mjs && node stickycheck.mjs && node freezecheck.mjs && node measurecols.mjs && node stalecheck.mjs && node cdp-test.mjs"
+  },
+  "dependencies": {
+    "facetful": "^0.3.0"
+  }
+}

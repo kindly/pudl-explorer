@@ -1,6 +1,7 @@
 // Isolate the cost of multi-column arithmetic on the wide table.
 import { readFileSync } from "node:fs";
-const eng = await (await import("./vendor/facetful/core.js")).instantiate(readFileSync("./vendor/facetful/facetful_wasm.wasm"));
+import { coreUrl, wasmUrl } from "./engine.js";
+const eng = await (await import(coreUrl.href)).instantiate(readFileSync(wasmUrl));
 const h = eng.openTable(readFileSync("../data/generator_tech_wide.facetful")).handle;
 const Y = [...Array(17).keys()].map((i) => 2010 + i);
 const sumN = (n) => `sum(${Y.slice(0, n).map((y) => `coalesce(gen_${y},0)`).join(" + ")})`;
