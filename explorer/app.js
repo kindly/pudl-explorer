@@ -1,15 +1,15 @@
 // PUDL generator explorer on facetful. One filter state (the URL query string) drives every panel;
 // each panel is one GROUP BY over the same WHERE. Two images in one worker — see sql.js for which
 // table serves which measure. No build step: plain ES modules, vendored facetful and maplibre.
-import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=6f04a7d2";
+import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=56bc9d96";
 // the engine path carries its version, so the entry point is reached by dynamic import
 const { Facetful } = await import(indexUrl.href);
-import { createPlantMap } from "./map.js?v=6f04a7d2";
+import { createPlantMap } from "./map.js?v=56bc9d96";
 import {
   TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, MEASURE_GROUPS, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
   yearsIn, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, gridCountSql, monthsPerYearSql,
   plantCardSql, plantTechSql, plantFercSql, plantNameSql,
-} from "./sql.js?v=6f04a7d2";
+} from "./sql.js?v=56bc9d96";
 
 const DATA_DIR = "../data/";
 const OPFS_DIR = "pudl";
@@ -612,7 +612,7 @@ panels.push({
 // ---- the grid: one row per generator, sparklines, windowed infinite scroll
 const ghead = $("#grid .ghead"), grows = $("#grid .grows"), gtall = $("#grid .tall"), scroller = $("#grid-scroller");
 const gview = $("#grid .gviewport");
-const BUILD = "6f04a7d2";
+const BUILD = "56bc9d96";
 
 /**
  * A stale shell announces itself.

@@ -1,7 +1,7 @@
 // Headless Chromium driver over the DevTools protocol (no puppeteer): loads the explorer,
 // waits for the data to open, screenshots, checks the DOM, clicks a facet, screenshots again.
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import "./stamp.mjs";   // assets carry a content hash; never serve an unstamped tree
@@ -20,6 +20,20 @@ const chrome = spawn("chromium", [
   "--js-flags=--max-old-space-size=6144", "--enable-features=FileSystemAccessAPI",
   "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "about:blank",
 ], { stdio: ["ignore", "pipe", "pipe"] });
+
+// Clean up however this run ends. Cleanup used to sit only on the success path, so a failing
+// assertion left the profile directory and the headless browser behind; enough runs filled /tmp
+// and left orphaned browsers resident.
+const cleanUp = () => {
+  try { chrome.kill(); } catch {}
+  try { server?.kill(); } catch {}
+  try { rmSync(profile, { recursive: true, force: true }); } catch {}
+};
+process.on("exit", cleanUp);
+process.on("SIGINT", () => process.exit(130));
+process.on("uncaughtException", (e) => { console.error(e); process.exit(1); });
+process.on("unhandledRejection", (e) => { console.error(e); process.exit(1); });
+
 chrome.stderr.on("data", (d) => { const s = String(d); if (/error|fatal/i.test(s) && !/dbus|gpu|vaapi/i.test(s)) process.stderr.write(s); });
 let targets;
 for (let i = 0; i < 50; i++) { try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }

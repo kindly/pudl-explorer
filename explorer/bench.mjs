@@ -1,7 +1,9 @@
 // Old vs new facetful on the exact queries this page runs.
 import { readFileSync } from "node:fs";
 import { DIR } from "./engine.js";
-const OLD = process.env.TMPDIR + "/facetful-old";
+// FACETFUL_OLD points at the build to compare against; sync-vendor deletes the previous
+// versioned directory, so stash a copy before upgrading.
+const OLD = process.env.FACETFUL_OLD ?? (process.env.TMPDIR + "/facetful-old");
 const engines = {};
 for (const [tag, dir] of [["old", OLD], ["new", DIR.replace(/\/$/, "")]]) {
   const { instantiate } = await import(`${dir}/core.js`);

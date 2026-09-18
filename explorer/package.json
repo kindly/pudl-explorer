@@ -9,6 +9,6 @@
     "test": "node sync-vendor.mjs --check && node sql-smoke.mjs && node gridcheck.mjs && node stickycheck.mjs && node freezecheck.mjs && node measurecols.mjs && node stalecheck.mjs && node cdp-test.mjs"
   },
   "dependencies": {
-    "facetful": "^0.3.0"
+    "facetful": "^0.3.1"
   }
 }

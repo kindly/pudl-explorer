@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 const port = 9337, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -9,6 +9,20 @@ const profile = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "chrome-"));
 const chrome = spawn("chromium", ["--headless=new", "--no-proxy-server", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
   "--no-first-run", "--disable-gpu", "--disable-crash-reporter", `--crash-dumps-dir=${profile}`, "--window-size=1500,1000",
   "--js-flags=--expose-gc", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "about:blank"], { stdio: ["ignore", "ignore", "ignore"] });
+
+// Clean up however this run ends. Cleanup used to sit only on the success path, so a failing
+// assertion left the profile directory and the headless browser behind; enough runs filled /tmp
+// and left orphaned browsers resident.
+const cleanUp = () => {
+  try { chrome.kill(); } catch {}
+  try { server?.kill(); } catch {}
+  try { rmSync(profile, { recursive: true, force: true }); } catch {}
+};
+process.on("exit", cleanUp);
+process.on("SIGINT", () => process.exit(130));
+process.on("uncaughtException", (e) => { console.error(e); process.exit(1); });
+process.on("unhandledRejection", (e) => { console.error(e); process.exit(1); });
+
 let t; for (let i = 0; i < 60; i++) { try { t = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await sleep(200); } }
 const ws = new WebSocket(t.find((x) => x.type === "page").webSocketDebuggerUrl);
 await new Promise((r) => (ws.onopen = r));

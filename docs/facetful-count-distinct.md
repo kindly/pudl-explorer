@@ -1,5 +1,10 @@
 # `count(distinct)` is now the floor on this page — two ways out
 
+> **Update, 0.3.1.** Most of this is now history: 0.3.1 cut `count(distinct)` by
+> 2× to 3×, and the whole-page total by 1.5× to 1.8×. Measurements and what still
+> stands are in [After 0.3.1](#after-031) at the end. The body below is the 0.3.0
+> analysis that prompted it, left as written.
+
 Follow-on to `facetful-notes.md`. That round took the whole page from 87.9 ms to
 43.7 ms and left exactly one line unmoved: `count(distinct)`, 1.0×. It is now the
 largest single cost in a facet query, and on the wider of the two tables it is most
@@ -181,3 +186,82 @@ const h = eng.openTable(readFileSync("data/generator_tech_wide.facetful")).handl
 
 Timings are best-of-15 on a warm image. Clustering and cardinality figures come from
 pulling the raw column with `select plant_id_eia as p from t` and walking it.
+
+---
+
+## After 0.3.1
+
+0.3.1 is wasm-only again: `core.js`, `index.js`, `worker.js`, `parquet.js` and
+`index.d.ts` are byte-identical to 0.3.0. The wasm got **smaller**, 473,183 to
+440,875 bytes.
+
+### The page
+
+Same suite as `facetful-notes.md`, best-of-15 against the shipped images.
+
+| | 0.3.0 | 0.3.1 | |
+|---|---|---|---|
+| `plant_tech_year`, whole suite | 44.1 ms | 24.2 ms | **1.82×** |
+| `generator_tech_wide`, whole suite | 71.6 ms | 47.2 ms | **1.52×** |
+| totals (`count(distinct)`), pty | 6.5 ms | 2.2 ms | **2.92×** |
+| map, `group by plant, fuel` | 19.5 / 22.3 ms | 8.1 / 6.9 ms | **2.4× / 3.2×** |
+| facet utility, limit 300 | 7.6 / 11.1 ms | 3.6 / 5.1 ms | **2.1× / 2.2×** |
+
+In the browser, engine time on first settle fell from 143 ms to 89 ms, and a
+year-range change from 97 ms to 55 ms.
+
+### The aggregate itself
+
+Isolating it the same way as above, group by fuel:
+
+| variant | 0.3.0 | 0.3.1 | |
+|---|---|---|---|
+| gw, one distinct only | 1.7 ms | 0.7 ms | **2.3×** |
+| gw, two distincts only | 3.7 ms | 1.6 ms | **2.4×** |
+| pty, one distinct only | 6.0 ms | 1.8 ms | **3.3×** |
+| gw, `count(*)` only | 0.2 ms | 0.2 ms | 1.0× |
+| gw, measure only | 2.2 ms | 2.2 ms | 1.0× |
+| pty, measure only | 1.6 ms | 1.5 ms | 1.0× |
+
+Repeated three times; the `count(*)` and measure rows sit in a 0.88× to 1.14× band
+run to run, so those are unchanged and the distinct rows are the real signal.
+
+### Which distinct counts got faster
+
+| column | distinct | runs | clustered | 0.3.0 | 0.3.1 | |
+|---|---|---|---|---|---|---|
+| `plant_id_eia` (int) | 18,937 | 18,937 | yes | 2.0 ms | 1.0 ms | **2.04×** |
+| `gen_key` (int) | 40,740 | 40,740 | yes | 2.5 ms | 1.2 ms | **2.09×** |
+| `utility_name_eia` (dict) | 8,261 | 14,043 | no | 0.3 ms | 0.3 ms | 1.06× |
+| `operational_status` (dict) | 4 | 7,843 | no | 0.3 ms | 0.3 ms | 1.07× |
+| `technology_description` (dict) | 29 | 13,267 | no | 0.3 ms | 0.3 ms | 1.06× |
+
+The gain lands entirely on the two integer columns. The dictionary columns were
+already cheap and did not move.
+
+**This does not confirm the clustered-scan theory**, and it is worth being explicit
+about that. In this data the two integer columns are also the two clustered columns
+and the two highest-cardinality ones, so type, clustering and cardinality are
+confounded and these numbers cannot separate them. Telling them apart needs an
+unclustered integer column of comparable cardinality, which neither image has. If
+the implementation went down the integer route rather than the clustering route,
+then a table written in a different order keeps the gain, which would be the better
+outcome.
+
+### What still stands
+
+**Route 1 looks delivered**, whatever the mechanism. A distinct plant count now
+costs about 1 ms on 230,891 rows instead of 6.
+
+**Route 2, the array type, is no longer a count-performance argument.** At 0.7 ms
+the counts are no longer the floor, and halving the scan again would be a small
+absolute win. The case for arrays now rests on the two things in its favour that
+were never about speed: images shrink, here 42,257 rows to 18,937, and the
+modelling wart goes away where a plant with two technologies is two rows and gets
+counted twice by anything using `count(*)`.
+
+**The measure sum is now the floor.** On `generator_tech_wide` a facet is 3.5 ms,
+of which 2.2 ms is summing seventeen year columns and 0.7 ms is the counts.
+Zero-filling already bought 4.2× over `coalesce()` there. Whether a wide additive
+sum can be vectorised further is the next question, and it is a bigger share of
+this page than `count(distinct)` ever was.
