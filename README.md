@@ -1,5 +1,7 @@
 # pudl-explorer
 
+https://kindly.github.io/pudl-explorer/explorer/
+
 A faceted, in-browser explorer for US power plant data from
 [PUDL](https://catalyst.coop/pudl/) (Catalyst Cooperative's cleaned EIA, EPA and
 FERC data), running entirely on static files with
