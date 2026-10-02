@@ -8,9 +8,8 @@ FERC data), running entirely on static files with
 [facetful](https://www.npmjs.com/package/facetful), a WebAssembly columnar SQL
 engine built for exactly this — no server, no database.
 
-**Live:** https://kindly.github.io/pudl-explorer/. A first visit downloads about
-14.5 MB of compiled columnar images; repeat visits load them from the browser's
-own storage and fetch nothing.
+A first visit downloads about 14.5 MB of compiled columnar images; repeat visits
+load them from the browser's own storage and fetch nothing.
 
 - `explorer/` — the page and its vendored dependencies; see
   [`explorer/README.md`](explorer/README.md) for the data model, what each panel
