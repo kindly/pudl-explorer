@@ -18,8 +18,13 @@
 // `t` in SQL and the JS `{ table }` option picks which one.
 
 /** Year range the wide table was built over; see scripts/build-generator-wide.sql. */
+import { NEAR_PARAM as NEAR, parseNear } from "./near.js";
+
 export const YEARS = Array.from({ length: 17 }, (_, i) => 2010 + i);
-export const TABLES = { gw: "generator_tech_wide", pty: "plant_tech_year" };
+export const TABLES = { gw: "generator_tech_wide", pty: "plant_tech_year", places: "places_us" };
+// `places` is not a measure table: nothing groups by it. It backs the town autocomplete only,
+// and is fetched the first time someone types in the near box.
+export { NEAR_PARAM, KM_OPTIONS, DEFAULT_KM, placeLabel, parseNear, formatNear, snapKm, circleRing } from "./near.js";
 
 export const DIMS = [
   { key: "fuel", col: "fuel_type_code_pudl", title: "Fuel type", swatch: true },
@@ -118,6 +123,26 @@ export function measureExpr(measure, years, { grouped = true } = {}) {
   return `round(${total(measure.prefix)}/${measure.scale}.0, 3)`;
 }
 
+/**
+ * WHERE fragment for the near filter. `geo_distance` is a facetful UDF returning metres; it
+ * arrived with the UDF bundle in 0.5 and is on by default, which is what makes this possible
+ * without a build step. Both images carry latitude and longitude, so one clause serves both.
+ */
+export const nearClause = (n) =>
+  `geo_distance(latitude, longitude, ${n.lat}, ${n.lon}) <= ${n.km * 1000}`;
+
+/** Autocomplete: "spring" matches names starting with it, largest place first. A comma
+ *  narrows by region, so "springfield, mo" finds the Missouri one. */
+export function placeSearchSql(text, limit = 8) {
+  const needle = (s) => s.trim().replaceAll("%", "").replaceAll("_", "");   // a literal, never a pattern
+  const [head, ...quals] = String(text).split(",").map(needle);
+  if (!head) return null;
+  const conds = [`(name like ${lit(head + "%")} or ascii like ${lit(head + "%")})`];
+  for (const qu of quals.filter(Boolean)) conds.push(`region like ${lit("%" + qu + "%")}`);
+  return `select id, name, region, lat, lon, population from t where ${conds.join(" and ")} ` +
+    `order by population desc limit ${limit}`;
+}
+
 function searchClause(q) {
   const words = q.trim().split(/\s+/).filter(Boolean).slice(0, 6);
   if (!words.length) return "";
@@ -137,6 +162,11 @@ export function whereClause(filters, { table = "gw", except, extra } = {}) {
     if (key === SEARCH_PARAM) {
       const c = searchClause(values.join(" "));
       if (c) parts.push(c);
+      continue;
+    }
+    if (key === NEAR) {
+      const n = parseNear(values[0]);
+      if (n) parts.push(nearClause(n));
       continue;
     }
     const dim = ALL_DIMS.find((d) => d.key === key);

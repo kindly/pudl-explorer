@@ -14,3 +14,16 @@ export const coreUrl = new URL(DIR + "core.js", import.meta.url);
 export const parquetUrl = new URL(DIR + "parquet.js", import.meta.url);
 export const workerUrl = new URL(DIR + "worker.js", import.meta.url);
 export const wasmUrl = new URL(DIR + "facetful_wasm.wasm", import.meta.url);
+export const udfsUrl = new URL(DIR + "udfs.js", import.meta.url);
+
+/**
+ * Register the ready-made UDFs (geo_distance and friends) on an engine driven through
+ * core.js directly. Facetful.open() does this for the worker when `udfs` is left on, so
+ * only the node harnesses need to ask; without it a near-filter query fails with
+ * "unknown function 'geo_distance'".
+ */
+export async function registerBuiltinUdfs(eng) {
+  const { udfs } = await import(udfsUrl.href);
+  for (const u of udfs) eng.registerFunction(u.name, u.signature, u.fn);
+  return eng;
+}

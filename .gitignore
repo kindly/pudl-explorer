@@ -27,3 +27,6 @@ data/*.parquet
 
 # npm packages: vendor/facetful-<version> is the copy that gets served and committed
 explorer/node_modules/
+
+# GeoNames download for scripts/build-places.mjs (re-fetchable, 40 MB)
+.geonames/

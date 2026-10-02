@@ -15,6 +15,7 @@ WHERE clause works on either:
 |---|---|---|---|---|
 | `generator_tech_wide` | plant × generator × technology | 42,257 | 3.6 MB | grid, facets, totals, years chart, map |
 | `plant_tech_year` | plant × technology × status × year | 230,891 | 10.9 MB | seasonality, FERC cost measures |
+| `places_us` | US populated places, GeoNames cities1000 | 17,343 | 0.3 MB | the "near a town" box, fetched on first use |
 
 `generator_tech_wide` (`../scripts/build-generator-wide.sql`) is **wide, not
 long**: seventeen years of history live as columns, `gen_2010 … gen_2026` and
@@ -140,6 +141,15 @@ done
 node stamp.mjs                                     # re-stamp the asset URLs
 ```
 
+The towns table is separate and rarely rebuilt:
+
+```
+mkdir -p .geonames && cd .geonames
+curl -LO https://download.geonames.org/export/dump/cities1000.zip && unzip cities1000.zip
+curl -LO https://download.geonames.org/export/dump/admin1CodesASCII.txt
+cd .. && node scripts/build-places.mjs .geonames   # -> data/places_us.facetful(.gz)
+```
+
 ## Tests
 
 ```
@@ -161,6 +171,7 @@ The rest below are run individually.
 | `ratiocheck.mjs` | non-additive measures draw lines not stacks, and size the map by an additive basis |
 | `facetsort.mjs` | every facet header either sorts both ways or does not offer to |
 | `stalecheck.mjs` | the stale-shell banner fires on a version mismatch and stays quiet otherwise |
+| `nearcheck.mjs` | the near filter: autocomplete, the filter, the shared link, and that the towns image is not fetched unless used |
 | `cdp-test.mjs` | headless Chromium end to end, screenshots to cwd (`FRESH=1` for an empty profile) |
 | `livecheck.mjs` | loads the deployed site and checks it boots and renders |
 | `bench.mjs`, `countperf.mjs` | engine comparison; `FACETFUL_OLD=<dir>` points at a build to compare against |
@@ -211,6 +222,16 @@ only on the success path.
   database. Because GEM splits sites by technology, each plant × PUDL fuel type
   picks the GEM plant whose fuel categories match, else the largest at that EIA
   id. 11,703 of 18,937 plants get a link.
+- **Near a town**: type a US town, pick from the autocomplete, and every panel filters to
+  plants within the chosen radius. Ported from gem-explorer. The whole filter travels in
+  one URL parameter, `near=<lat>,<lon>,<km>,<label>`, so a shared link filters immediately
+  without waiting for the towns table — which is itself only fetched the first time someone
+  types in the box, so a visitor who never uses it pays nothing. The clause is
+  `geo_distance(...) <= km*1000`, a facetful UDF that arrived with the UDF bundle in 0.5
+  and is on by default. It is cheaper than no filter at all, because it prunes rows before
+  the distinct count: a facet over the plant table is 1.4 ms with it against 1.2 ms
+  without, and the generator table drops from 0.5 ms to 0.2 ms. The map draws the radius
+  and frames it.
 - **Search**: words AND'ed, each matched with `LIKE` on plant and utility name.
 - Footer shows settle time for the whole page and per-panel engine ms.
 - `?griddebug=1` pins a readout of the heights, pool size, visible rows and row

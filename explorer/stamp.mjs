@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // engine.js names the versioned facetful directory, so it belongs in the stamp too
-const HASHED = ["app.js", "sql.js", "map.js", "theme.css", "engine.js"];
+const HASHED = ["app.js", "sql.js", "map.js", "near.js", "theme.css", "engine.js"];
 const here = (f) => new URL(f, import.meta.url);
 const read = (f) => readFileSync(here(f), "utf8");
 

@@ -1,15 +1,16 @@
 // PUDL generator explorer on facetful. One filter state (the URL query string) drives every panel;
 // each panel is one GROUP BY over the same WHERE. Two images in one worker — see sql.js for which
 // table serves which measure. No build step: plain ES modules, vendored facetful and maplibre.
-import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=93e81e8e";
+import { wasmUrl, workerUrl, indexUrl } from "./engine.js?v=6f8df494";
 // the engine path carries its version, so the entry point is reached by dynamic import
 const { Facetful } = await import(indexUrl.href);
-import { createPlantMap } from "./map.js?v=93e81e8e";
+import { createPlantMap } from "./map.js?v=6f8df494";
 import {
   TABLES, YEARS, DIMS, ALL_DIMS, MEASURES, MEASURE_GROUPS, SEARCH_PARAM, NULL_TOKEN, gridCols, gridSortable, MEASURE_SPARK,
+  NEAR_PARAM, KM_OPTIONS, DEFAULT_KM, placeLabel, parseNear, formatNear, snapKm, circleRing, placeSearchSql,
   yearsIn, facetSql, totalsSql, yearSql, seasonSql, mapSql, gridSql, gridCountSql, monthsPerYearSql,
   plantCardSql, plantTechSql, plantFercSql, plantNameSql,
-} from "./sql.js?v=93e81e8e";
+} from "./sql.js?v=6f8df494";
 
 const DATA_DIR = "../data/";
 const OPFS_DIR = "pudl";
@@ -78,6 +79,8 @@ function readState() {
   const filters = new Map();
   for (const d of ALL_DIMS) if (p.has(d.key)) filters.set(d.key, p.getAll(d.key));
   if (p.get(SEARCH_PARAM)) filters.set(SEARCH_PARAM, [p.get(SEARCH_PARAM)]);
+  // one param carries the whole near filter, so a shared link works before places loads
+  if (parseNear(p.get(NEAR_PARAM))) filters.set(NEAR_PARAM, [p.get(NEAR_PARAM)]);
   const [sc, sd] = (p.get("sort") ?? "twh:desc").split(":");
   return {
     filters,
@@ -602,6 +605,8 @@ panels.push({
       return { p: r.p, f: r.f, lat: r.lat, lon: r.lon, v, r: 1.5 + 9 * Math.sqrt(sizeOf(r) / maxS), c: fuelColor(r.f) };
     });
     plantMap?.update(lastMapPoints);
+    const nf = parseNear(state.filters.get(NEAR_PARAM)?.[0]);
+    plantMap?.showNear(nf ? circleRing(nf) : null, nf ? formatNear(nf) : "");
     const basis = { cap: "capacity", co2: "CO₂", gen: "generation" }[measure.sizeBy ?? "gen"];
     $("#map .sub").textContent = `${fmtInt.format(lastMapPoints.length)} plant × fuel points, `
       + (measure.nonAdditive ? `area ∝ ${basis}, colour by fuel; ${measure.label.toLowerCase()} is in the tooltip` : `area ∝ ${measure.label.toLowerCase()}`)
@@ -612,7 +617,7 @@ panels.push({
 // ---- the grid: one row per generator, sparklines, windowed infinite scroll
 const ghead = $("#grid .ghead"), grows = $("#grid .grows"), gtall = $("#grid .tall"), scroller = $("#grid-scroller");
 const gview = $("#grid .gviewport");
-const BUILD = "93e81e8e";
+const BUILD = "6f8df494";
 
 /**
  * A stale shell announces itself.
@@ -1042,6 +1047,86 @@ function showDebug() {
   ].join("\n");
 }
 
+// ---- near a town ---------------------------------------------------------------------
+/**
+ * Pick a town, filter to plants within N km of it. The places image (17,343 US towns from
+ * GeoNames, 0.29 MB) is fetched the first time someone types here and never otherwise, so
+ * a visitor who does not use this pays nothing for it.
+ */
+const nearQ = $("#near-q"), nearKm = $("#near-km"), nearHits = $("#near-hits");
+nearKm.replaceChildren(...KM_OPTIONS.map((k) => el("option", { value: String(k) }, `${k} km`)));
+
+let placesReady = null;
+const needPlaces = () => (placesReady ??= openTable("places", () => {})
+  .then(() => true)
+  .catch((e) => { console.warn("places table unavailable", e); placesReady = null; return false; }));
+
+const currentNear = () => parseNear(state.filters.get(NEAR_PARAM)?.[0]);
+
+function applyNear(n) {
+  if (!n) state.filters.delete(NEAR_PARAM);
+  else state.filters.set(NEAR_PARAM, [formatNear(n)]);
+  writeState();
+}
+
+let hitRows = [], hitAt = -1, hitSeq = 0;
+function showHits(rows) {
+  hitRows = rows; hitAt = -1;
+  if (!rows.length) { nearHits.hidden = true; return; }
+  nearHits.replaceChildren(...rows.map((r, i) =>
+    el("div", { class: "hit", role: "option", onmousedown: (e) => { e.preventDefault(); choose(i); } },
+      el("span", {}, placeLabel(r)),
+      el("span", { class: "pop" }, compactInt(r.population)))));
+  nearHits.hidden = false;
+}
+const hideHits = () => { nearHits.hidden = true; hitRows = []; hitAt = -1; };
+
+function choose(i) {
+  const r = hitRows[i];
+  if (!r) return;
+  nearQ.value = placeLabel(r);
+  hideHits();
+  applyNear({ lat: r.lat, lon: r.lon, km: Number(nearKm.value) || DEFAULT_KM, label: placeLabel(r) });
+}
+
+let typeTimer = 0;
+nearQ.addEventListener("input", () => {
+  clearTimeout(typeTimer);
+  const text = nearQ.value;
+  if (!text.trim()) { hideHits(); if (currentNear()) applyNear(null); return; }
+  typeTimer = setTimeout(async () => {
+    const seq = ++hitSeq;
+    if (!(await needPlaces())) return;
+    const sql = placeSearchSql(text);
+    if (!sql || seq !== hitSeq) return;
+    try {
+      const { rows } = await q(sql, "places");
+      if (seq !== hitSeq) return;                       // a later keystroke already won
+      showHits(rows);
+      if (!rows.length) { nearHits.replaceChildren(el("div", { class: "hit none" }, "no town matches")); nearHits.hidden = false; }
+    } catch (e) { console.warn("place search failed", e); }
+  }, 120);
+});
+
+nearQ.addEventListener("keydown", (e) => {
+  if (nearHits.hidden) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    hitAt = Math.max(0, Math.min(hitRows.length - 1, hitAt + (e.key === "ArrowDown" ? 1 : -1)));
+    [...nearHits.children].forEach((c, i) => c.setAttribute("aria-selected", String(i === hitAt)));
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    choose(hitAt >= 0 ? hitAt : 0);
+  } else if (e.key === "Escape") {
+    hideHits();
+  }
+});
+nearQ.addEventListener("blur", () => setTimeout(hideHits, 120));
+nearKm.addEventListener("change", () => {
+  const n = currentNear();
+  if (n) applyNear({ ...n, km: Number(nearKm.value) || DEFAULT_KM });
+});
+
 // A resize changes how many rows fit. iOS Safari growing or shrinking the page as the URL bar
 // slides is exactly this case, and it reports through visualViewport rather than window resize on
 // some versions, so listen to both. Debounced, and it re-measures rather than guessing.
@@ -1120,6 +1205,12 @@ function renderChips() {
         chips.push(chip);
         continue;
       }
+      if (k === NEAR_PARAM) {
+        const n = parseNear(v);
+        chips.push(el("span", { class: "chip" }, `within ${n.km} km of ${n.label || `${n.lat}, ${n.lon}`}`,
+          el("button", { class: "x", type: "button", title: "remove this filter", onclick: () => clearKey(k) }, "×")));
+        continue;
+      }
       const label = k === SEARCH_PARAM ? `search: ${v}`
         : `${dim?.title ?? k}: ${v === NULL_TOKEN ? "(blank)" : k === "decade" ? v + "s" : v.replace("..", "–")}`;
       chips.push(el("span", { class: "chip" }, label, el("button", { class: "x", type: "button", title: "remove this filter", onclick: () => toggle(k, v) }, "×")));
@@ -1130,6 +1221,13 @@ function renderChips() {
 function syncControls() {
   $("#measure").value = state.measure;
   if ($("#q") !== document.activeElement) $("#q").value = state.filters.get(SEARCH_PARAM)?.[0] ?? "";
+  // the near box is driven by the URL too, so a shared link or a back button restores it
+  const nq = $("#near-q"), nk = $("#near-km");
+  if (nq) {
+    const n = parseNear(state.filters.get(NEAR_PARAM)?.[0]);
+    if (nq !== document.activeElement) nq.value = n ? n.label || `${n.lat}, ${n.lon}` : "";
+    nk.value = String(n ? snapKm(n.km) : DEFAULT_KM);
+  }
 }
 // The picker is generated, so adding a measure cannot leave the dropdown behind.
 (function buildMeasurePicker() {

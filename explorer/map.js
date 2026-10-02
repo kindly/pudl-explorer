@@ -46,6 +46,16 @@ export async function createPlantMap(container, { hoverHtml, clickHtml } = {}) {
 
   let pending = null;
   await new Promise((res) => map.on("load", () => {
+    // the near radius sits under the plants so it never swallows a click on a circle
+    map.addSource("near", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    map.addLayer({
+      id: "near-fill", type: "fill", source: "near",
+      paint: { "fill-color": "#1b7f93", "fill-opacity": 0.07 },
+    });
+    map.addLayer({
+      id: "near-line", type: "line", source: "near",
+      paint: { "line-color": "#1b7f93", "line-width": 1.2, "line-dasharray": [3, 2], "line-opacity": 0.8 },
+    });
     map.addSource("plants", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     map.addLayer({
       id: "plants", type: "circle", source: "plants",
@@ -107,5 +117,21 @@ export async function createPlantMap(container, { hoverHtml, clickHtml } = {}) {
   }
   /** Replace the hover tooltip's HTML if it is still showing plant `p` (used when a name arrives asynchronously). */
   const refreshHover = (p, html) => { if (hover.isOpen() && hoverP === p) hover.setHTML(html); };
-  return { map, update, refreshHover, fitUS: () => map.fitBounds(US_BOUNDS, { padding: 10, duration: 600 }) };
+  /** Draw (or clear) the near-filter radius, and frame it the first time it is set. */
+  let framed = "";
+  const showNear = (ring, key) => {
+    const src = map.getSource("near");
+    if (!src) return;
+    src.setData(ring
+      ? { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [ring] } }] }
+      : { type: "FeatureCollection", features: [] });
+    if (!ring) { framed = ""; return; }
+    if (key === framed) return;                 // only move the camera when the circle changes
+    framed = key;
+    let w = 180, e = -180, so = 90, no = -90;
+    for (const [lon, lat] of ring) { w = Math.min(w, lon); e = Math.max(e, lon); so = Math.min(so, lat); no = Math.max(no, lat); }
+    map.fitBounds([[w, so], [e, no]], { padding: 48, duration: 600 });
+  };
+
+  return { map, update, refreshHover, showNear, fitUS: () => map.fitBounds(US_BOUNDS, { padding: 10, duration: 600 }) };
 }

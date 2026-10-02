@@ -15,10 +15,11 @@ load them from the browser's own storage and fetch nothing.
   [`explorer/README.md`](explorer/README.md) for the data model, what each panel
   does, how the engine is vendored, and what we learned about facetful at this
   scale.
-- `data/*.facetful.gz` — the two tables the page loads: generator × technology
-  with seventeen years of history as columns (42K rows, 3.6 MB) and plant ×
-  technology × status × year with monthly detail (231K rows, 10.9 MB), both with
-  EPA CEMS emissions and FERC Form 1 costs joined on.
+- `data/*.facetful.gz` — the tables the page loads: generator × technology with
+  seventeen years of history as columns (42K rows, 3.6 MB) and plant × technology
+  × status × year with monthly detail (231K rows, 10.9 MB), both with EPA CEMS
+  emissions and FERC Form 1 costs joined on. A third, 17K US towns from GeoNames
+  (0.3 MB), backs the "near a town" filter and is fetched only if you use it.
 - `scripts/` — the DuckDB rebuild recipe from PUDL's public S3 bucket.
 - `docs/` — performance write-ups for the engine author.
 
