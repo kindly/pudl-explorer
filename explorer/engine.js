@@ -7,7 +7,7 @@
 // or in vendor/ is edited by hand.
 //
 // Only URLs live here, so node harnesses can import it without pulling in the browser entry point.
-export const DIR = "./vendor/facetful-0.3.1/";
+export const DIR = "./vendor/facetful-0.7.1/";
 
 export const indexUrl = new URL(DIR + "index.js", import.meta.url);
 export const coreUrl = new URL(DIR + "core.js", import.meta.url);

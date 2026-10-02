@@ -30,11 +30,16 @@ const DST = new URL(`${dirName}/`, VENDOR);
 mkdirSync(DST, { recursive: true });
 const diff = [];
 for (const f of files) {
+  if (!existsSync(new URL(f, SRC))) continue;      // an optional entry the package did not ship
   const src = readFileSync(new URL(f, SRC));
   const dst = existsSync(new URL(f, DST)) ? readFileSync(new URL(f, DST)) : null;
   if (dst && dst.equals(src)) continue;
   diff.push(`${f} ${dst ? sum(dst) : "(absent)"} -> ${sum(src)}`);
-  if (!check) writeFileSync(new URL(f, DST), src);
+  // the package's `files` can name nested paths (0.5 ships bin/facetful.mjs)
+  if (!check) {
+    mkdirSync(new URL(".", new URL(f, DST)), { recursive: true });
+    writeFileSync(new URL(f, DST), src);
+  }
 }
 // engine.js points at the versioned directory; everything else imports engine.js
 const eng = new URL("./engine.js", import.meta.url);

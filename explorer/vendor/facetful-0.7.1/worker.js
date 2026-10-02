@@ -5,9 +5,12 @@
 
 import { instantiate, transferables, QueryError } from "./core.js";
 import { parquetToColumns } from "./parquet.js";
+import { udfs as builtinUdfs } from "./udfs.js";
 
 let engine = null;
 const tables = new Map(); // name -> handle
+// register under a name for FROM / JOIN from other tables' queries
+const setTable = (name, handle) => { tables.set(name, handle); engine.catalogRegister(name, handle); };
 let lastTable = null;
 
 // OPFS file registry: the wasm's opfs_read import addresses files by these ids.
@@ -77,7 +80,7 @@ async function opfsOpenTable(name, path, cacheBytes) {
   }
   try {
     const { handle, rows } = engine.openOpfsTable(fileId, h.getSize(), cacheBytes);
-    tables.set(name, handle);
+    setTable(name, handle);
     lastTable = handle;
     return { rows, fileLen: h.getSize() };
   } catch (err) {
@@ -124,10 +127,13 @@ self.onmessage = async (e) => {
       if (e.data.hyparquetUrl) hyparquetUrl = e.data.hyparquetUrl;
       const wasmBytes = await (await fetch(e.data.wasmUrl)).arrayBuffer();
       engine = await instantiate(wasmBytes, opfsRead);
+      // the ready-made functions (udfs.js) are on by default: they cost
+      // nothing until a query calls one, and agents expect date_trunc to exist
+      if (e.data.udfs !== false) for (const u of builtinUdfs) engine.registerFunction(u.name, u.signature, u.fn);
       reply({ ok: true });
     } else if (cmd === "load") {
       const { handle, rows } = engine.openTable(e.data.buffer);
-      tables.set(e.data.name, handle);
+      setTable(e.data.name, handle);
       lastTable = handle;
       reply({ ok: true, rows });
     } else if (cmd === "loadParquet") {
@@ -135,7 +141,7 @@ self.onmessage = async (e) => {
       const t0 = performance.now();
       const { rows, img } = await transcodeParquet(e.data.buffer);
       const { handle } = engine.openImage(img);
-      tables.set(e.data.name, handle);
+      setTable(e.data.name, handle);
       lastTable = handle;
       reply({ ok: true, rows, transcodeMs: performance.now() - t0 });
     } else if (cmd === "openParquet") {
@@ -159,7 +165,7 @@ self.onmessage = async (e) => {
         imageBytes = engine.imageBytes(img);
       } catch { /* copy-out failed: open uncached */ }
       const { handle } = engine.openImage(img);
-      tables.set(e.data.name, handle);
+      setTable(e.data.name, handle);
       lastTable = handle;
       if (imageBytes) {
         try {
@@ -168,6 +174,46 @@ self.onmessage = async (e) => {
         } catch { /* non-secure context or quota: stay memory-only */ }
       }
       reply({ ok: true, rows, source: "transcode", cached, transcodeMs });
+    } else if (cmd === "materialize") {
+      // derived table: run the query on the source table, compile its result
+      // into a new in-memory table under `name`; optionally persist the image
+      const src = e.data.table ? tables.get(e.data.table) : lastTable;
+      if (!src) throw new Error(`no table loaded${e.data.table ? `: '${e.data.table}'` : ""}`);
+      const t0 = performance.now();
+      const img = engine.materialize(src, e.data.sql);
+      let bytes = 0;
+      if (e.data.persist) {
+        const image = engine.imageBytes(img);
+        bytes = image.byteLength;
+        await opfsWrite(e.data.persist, image);
+      }
+      const { handle, rows } = engine.openImage(img);
+      setTable(e.data.name, handle);
+      reply({ ok: true, rows, bytes, elapsedMs: performance.now() - t0 });
+    } else if (cmd === "loadCsv") {
+      // a File/Blob streams twice through the converter; a buffer is one chunk
+      const src = e.data.source;
+      const chunks = typeof src.stream === "function"
+        ? () => src.stream()
+        : async function* () { yield new Uint8Array(src); };
+      const t0 = performance.now();
+      const { bytes, rows, schema } = await engine.convertCsv(chunks, { groupTarget: e.data.groupTarget });
+      if (e.data.persist) await opfsWrite(e.data.persist, bytes);
+      const { handle } = engine.openTable(bytes);
+      setTable(e.data.name, handle);
+      lastTable = handle;
+      reply({ ok: true, rows, bytes: bytes.byteLength, schema, elapsedMs: performance.now() - t0 });
+    } else if (cmd === "registerFunction") {
+      // functions don't cross postMessage: `source` is the function's text (an
+      // expression — an arrow function, or an IIFE returning one for state)
+      const fn = e.data.moduleUrl
+        ? (await import(e.data.moduleUrl)).default
+        : new Function(`return (${e.data.source});`)();
+      if (typeof fn !== "function") throw new Error(`registerFunction('${e.data.name}'): source is not a function`);
+      engine.registerFunction(e.data.name, e.data.signature, fn);
+      reply({ ok: true });
+    } else if (cmd === "unregisterFunction") {
+      reply({ ok: engine.unregisterFunction(e.data.name) });
     } else if (cmd === "storeOpfs") {
       await opfsWrite(e.data.path, new Uint8Array(e.data.buffer));
       reply({ ok: true, bytes: e.data.buffer.byteLength });
@@ -196,15 +242,33 @@ self.onmessage = async (e) => {
       if (!handle) throw new Error("no table loaded");
       engine.setMaskBudget(handle, e.data.bytes);
       reply({ ok: true });
+    } else if (cmd === "describe") {
+      const handle = e.data.table ? tables.get(e.data.table) : lastTable;
+      if (!handle) throw new Error(`no table loaded${e.data.table ? `: '${e.data.table}'` : ""}`);
+      reply({ ok: true, info: engine.describe(handle) });
+    } else if (cmd === "memoryStats") {
+      // the worker's whole footprint in one number: wasm linear memory never
+      // shrinks, so this is its high-water (image copies, caches, results)
+      reply({ ok: true, wasmBytes: engine.mem().byteLength, tables: tables.size });
     } else if (cmd === "cacheStats") {
       const handle = e.data.table ? tables.get(e.data.table) : lastTable;
       if (!handle) throw new Error("no table loaded");
       reply({ ok: true, ...engine.cacheStats(handle) });
+    } else if (cmd === "queryBatch") {
+      const handle = e.data.table ? tables.get(e.data.table) : lastTable;
+      if (!handle) throw new Error(`no table loaded${e.data.table ? `: '${e.data.table}'` : ""}`);
+      const t0 = performance.now();
+      const results = engine.queryBatch(handle, e.data.sqls, { dictText: e.data.dictText ?? false });
+      // the batch's time on every result: the statements run interleaved,
+      // so there is no per-statement time (index.d.ts says not to sum them)
+      const elapsedMs = performance.now() - t0;
+      for (const r of results) r.elapsedMs = elapsedMs;
+      reply({ ok: true, results }, results.flatMap(transferables));
     } else if (cmd === "query") {
       const handle = e.data.table ? tables.get(e.data.table) : lastTable;
       if (!handle) throw new Error(`no table loaded${e.data.table ? `: '${e.data.table}'` : ""}`);
       const t0 = performance.now();
-      const result = engine.query(handle, e.data.sql);
+      const result = engine.query(handle, e.data.sql, { dictText: e.data.dictText ?? false });
       result.elapsedMs = performance.now() - t0;
       reply({ ok: true, result }, transferables(result));
     } else {

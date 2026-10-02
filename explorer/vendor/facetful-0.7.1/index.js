@@ -9,7 +9,7 @@
 //   [...r.rows()]              // row objects, materialized lazily
 
 export class Facetful {
-  static async open({ wasmUrl, workerUrl, hyparquetUrl } = {}) {
+  static async open({ wasmUrl, workerUrl, hyparquetUrl, udfs = true } = {}) {
     // the no-argument form must stay a literal `new Worker(new URL(...))`
     // expression: bundlers (Vite, webpack) statically analyze exactly that
     // pattern to compile the worker graph
@@ -21,6 +21,7 @@ export class Facetful {
       cmd: "init",
       wasmUrl: String(wasmUrl ?? new URL("./facetful_wasm.wasm", import.meta.url)),
       hyparquetUrl,
+      udfs,
     });
     return db;
   }
@@ -71,6 +72,54 @@ export class Facetful {
     return this._call({ cmd: "loadParquet", name, buffer }, [buffer]);
   }
 
+  /**
+   * Materialize a query's result as a new table named `name`: a derived,
+   * immutable table you then query like any other (`{ table: name }`).
+   * Runs against `table` (default: the last loaded). With `persist`, the
+   * compiled image is also written to OPFS at that path, so a later visit
+   * can `loadOpfs(name, path)` instead of recomputing. Returns { rows, bytes }.
+   *
+   * The SQL may name other loaded tables in FROM and JOIN, so a joined,
+   * persisted table is `materialize("x", "select … from t join dims d using (k)")`.
+   */
+  async materialize(name, sql, { table, persist } = {}) {
+    return this._call({ cmd: "materialize", name, sql, table, persist });
+  }
+
+  /**
+   * Convert a CSV (a File/Blob, or an ArrayBuffer) into a table named `name`,
+   * streaming in bounded memory — two passes over the input, so a File is
+   * read twice. Types are inferred (int, float, date, timestamp, text;
+   * repeated text becomes a dictionary). Optionally persist the image to OPFS.
+   */
+  async loadCsv(name, source, { persist, groupTarget } = {}) {
+    const transfer = source instanceof ArrayBuffer ? [source] : [];
+    return this._call({ cmd: "loadCsv", name, source, persist, groupTarget }, transfer);
+  }
+
+  /**
+   * Register a user-defined scalar function, callable from any query.
+   * `signature` = { params: kind[], returns: kind, strict?, variadic?, perRow? }
+   * with kinds "int" | "float" | "bool" | "text" | "date" | "timestamp".
+   * `fn` runs in the worker, so pass a self-contained function (its source is
+   * sent — no closures over your variables) or `{ moduleUrl }` whose default
+   * export is the function. Vectorized by default: fn(args, len, out) is
+   * called once per lane (see core.js Engine.registerFunction); with
+   * `perRow: true` it is called per row with plain values and returns one.
+   */
+  async registerFunction(name, signature, fn) {
+    const msg = { cmd: "registerFunction", name, signature };
+    if (typeof fn === "function") msg.source = fn.toString();
+    else if (fn && fn.moduleUrl) msg.moduleUrl = fn.moduleUrl;
+    else if (typeof fn === "string") msg.source = fn;
+    else throw new Error("registerFunction: pass a function, its source text, or { moduleUrl }");
+    return this._call(msg);
+  }
+
+  async unregisterFunction(name) {
+    return this._call({ cmd: "unregisterFunction", name });
+  }
+
   /** Persist a .facetful image into OPFS at `path` (e.g. "facetful/plants.facetful"). */
   async storeOpfs(path, buffer) {
     return this._call({ cmd: "storeOpfs", path, buffer }, [buffer]);
@@ -98,6 +147,21 @@ export class Facetful {
   }
 
   /** { segments, bytes } currently held by a table's segment cache. */
+  /** A loaded table's catalog: rows, row groups, sort keys, and per column its
+   *  kind, on-disk bytes, null count, min/max and dictionary size. */
+  async describe({ table } = {}) {
+    const { info } = await this._call({ cmd: "describe", table });
+    return info;
+  }
+
+  /** The worker's wasm memory size in bytes (its high-water: wasm memory never
+   *  shrinks) and how many tables it holds. For reporting a page's memory
+   *  split between the worker and the page's own result buffers. */
+  async memoryStats() {
+    const { wasmBytes, tables } = await this._call({ cmd: "memoryStats" });
+    return { wasmBytes, tables };
+  }
+
   async cacheStats({ table } = {}) {
     const { segments, bytes } = await this._call({ cmd: "cacheStats", table });
     return { segments, bytes };
@@ -108,9 +172,20 @@ export class Facetful {
     await this._call({ cmd: "setMaskBudget", bytes, table });
   }
 
-  /** Run SQL. `table` selects a loaded table (defaults to the last loaded). */
-  async query(sql, { table } = {}) {
-    const { result } = await this._call({ cmd: "query", sql, table });
+  /** Run SQL — one statement, or an array of statements in one call (the
+   *  facet-shaped ones share masks and lanes and run fused; see index.d.ts).
+   *  `table` selects a loaded table (defaults to the last loaded).
+   *  `dictText` (true | "all"): text columns come back as codes + a dictionary
+   *  on `columnRaw` — true for the image's dictionary columns (free), "all"
+   *  for any text column where that pays (a hash pass); rows()/column() still
+   *  return strings. */
+  async query(sql, { table, dictText } = {}) {
+    if (Array.isArray(sql)) {
+      // a batch: one message, one engine call; facet-shaped statements fuse
+      const { results } = await this._call({ cmd: "queryBatch", sqls: sql, table, dictText });
+      return results.map((r) => new Result(r));
+    }
+    const { result } = await this._call({ cmd: "query", sql, table, dictText });
     return new Result(result);
   }
 
@@ -143,9 +218,29 @@ export class Result {
     return c;
   }
 
-  /** Raw buffers: { kind, values | offsets+bytes, validity }. */
+  /** Raw buffers: { kind, values | offsets+bytes | codes+dict, validity }. */
   columnRaw(name) {
     return this._find(name);
+  }
+
+  /** The whole decoded dictionary of a `dictText` column (index by a row's
+   *  code), or null when the column came as per-row text. Decodes every value
+   *  on first call — fine for hundreds or thousands of values; for a
+   *  dictionary of a million (a `"all"`-encoded title column) use
+   *  `dictValue`, which decodes one code at a time and caches it. */
+  dictionary(name) {
+    const c = this._find(name);
+    return c.codes ? dictStrings(c) : null;
+  }
+
+  /** One dictionary value of a `dictText` column by code, decoded on first
+   *  use and cached — the fast path for a reader that touches a few rows of
+   *  a result with a big dictionary. Null when the column came as per-row
+   *  text or the code is out of range. */
+  dictValue(name, code) {
+    const c = this._find(name);
+    if (!c.codes || code < 0 || code >= c.dict.offsets.length - 1) return null;
+    return dictValueAt(c, code);
   }
 
   /** Materialized values with nulls, in row order. */
@@ -167,6 +262,32 @@ export class Result {
   }
 }
 
+// per column: its decoded dictionary values, filled lazily by code so that
+// touching one row of a million-value dictionary decodes one string, not all
+const dictCache = new WeakMap();
+function dictSlots(c) {
+  let strs = dictCache.get(c);
+  if (!strs) {
+    strs = new Array(c.dict.offsets.length - 1);
+    dictCache.set(c, strs);
+  }
+  return strs;
+}
+function dictValueAt(c, k) {
+  const strs = dictSlots(c);
+  let s = strs[k];
+  if (s === undefined) {
+    s = dec.decode(c.dict.bytes.subarray(c.dict.offsets[k], c.dict.offsets[k + 1]));
+    strs[k] = s;
+  }
+  return s;
+}
+function dictStrings(c) {
+  const strs = dictSlots(c);
+  for (let k = 0; k < strs.length; k++) if (strs[k] === undefined) strs[k] = dec.decode(c.dict.bytes.subarray(c.dict.offsets[k], c.dict.offsets[k + 1]));
+  return strs;
+}
+
 function cellValue(c, i) {
   if ((c.validity[i >> 3] & (1 << (i & 7))) === 0) return null;
   switch (c.kind) {
@@ -181,6 +302,7 @@ function cellValue(c, i) {
     case "timestamp": // ms since epoch -> ISO, UTC
       return new Date(c.values[i]).toISOString().replace("T", " ").slice(0, 19);
     default:
+      if (c.codes) return dictValueAt(c, c.codes[i]);
       return dec.decode(c.bytes.subarray(c.offsets[i], c.offsets[i + 1]));
   }
 }
